@@ -1,0 +1,8 @@
+- generic [ref=e3]:
+  - heading "LETTER SHUFFLE" [level=1] [ref=e4]:
+    - text: LETTER
+    - text: SHUFFLE
+  - paragraph [ref=e5]: 1V1 WORD BATTLE
+  - generic [ref=e6]:
+    - textbox "Enter your name" [ref=e7]
+    - button "ENTER LOBBY" [ref=e8] [cursor=pointer]

@@ -1,0 +1,13 @@
+{
+  "name": "letter-shuffle-multiplayer",
+  "version": "1.0.0",
+  "description": "1v1 word guessing game over local network",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}

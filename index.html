@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Letter Shuffle - Multiplayer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- ── NAME SCREEN ──────────────────────────────── -->
+    <div id="nameScreen" class="screen active">
+      <h1 class="arcade-title">LETTER<br>SHUFFLE</h1>
+      <p class="arcade-subtitle">1V1 WORD BATTLE</p>
+
+      <div class="input-group" style="margin-top: 32px;">
+        <input type="text" id="playerNameInput" class="arcade-input" placeholder="Enter your name" maxlength="20" />
+        <button id="enterLobbyBtn" class="arcade-btn arcade-btn-primary">ENTER LOBBY</button>
+      </div>
+
+      <p id="nameError" class="error"></p>
+    </div>
+
+    <!-- ── LOBBY SCREEN ─────────────────────────────── -->
+    <div id="lobbyScreen" class="screen">
+      <div class="lobby-header">
+        <h1 class="arcade-title small">LOBBY</h1>
+        <button id="editNameBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small">EDIT NAME</button>
+      </div>
+      <p class="online-count">PLAYERS ONLINE: <span id="onlineCount">0</span></p>
+
+      <div id="onlinePlayers" class="players-list"></div>
+
+      <button id="refreshLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" style="margin-top: 8px;">REFRESH</button>
+    </div>
+
+    <!-- ── READY SCREEN ─────────────────────────────── -->
+    <div id="readyScreen" class="screen">
+      <h1 class="arcade-title small">READY!</h1>
+      <p class="arcade-subtitle" style="margin-bottom: 8px;">BOTH PLAYERS MUST READY UP</p>
+      <div id="readyPlayers" class="players-list"></div>
+      <p class="waiting-text" id="lobbyWaitingStatus"></p>
+      <button id="readyUpLobbyBtn" class="arcade-btn arcade-btn-primary">READY UP</button>
+      <button id="leaveRoomBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" style="margin-top: 10px;">LEAVE ROOM</button>
+    </div>
+
+    <!-- ── GAME SCREEN ──────────────────────────────── -->
+    <div id="gameScreen" class="screen">
+      <div class="game-header">
+        <span class="round-info">ROUND <span id="currentRound">1</span>/10</span>
+        <span id="opponentStatus" class="opponent-status"></span>
+      </div>
+
+      <div class="tiles">
+        <div id="tile1" class="tile">A</div>
+        <div id="tile2" class="tile">A</div>
+      </div>
+
+      <div id="timerBar" class="timer-bar">
+        <div id="timerProgress" class="timer-progress"></div>
+      </div>
+      <div id="timerDisplay" class="timer-display">10</div>
+
+      <input type="text" id="wordInput" class="word-input" placeholder="TYPE A WORD..." maxlength="20" autocomplete="off" />
+
+      <p class="submit-hint">PRESS ENTER TO SUBMIT</p>
+    </div>
+
+    <!-- ── RESULT SCREEN ────────────────────────────── -->
+    <div id="resultScreen" class="screen">
+      <h1 class="arcade-title small">ROUND <span id="resultRound">1</span><br>RESULTS</h1>
+
+      <div id="resultCards"></div>
+
+      <div id="examplesContainer" class="examples-container"></div>
+
+      <div class="scores" id="resultScores"></div>
+
+      <p id="waitingStatus" class="waiting-text" style="display: none;"></p>
+      <button id="readyUpBtn" class="arcade-btn arcade-btn-primary ready-btn" style="margin-top: 16px; display: none;">READY UP</button>
+    </div>
+
+    <!-- ── END SCREEN ──────────────────────────────── -->
+    <div id="endScreen" class="screen">
+      <h1 class="arcade-title">GAME<br>OVER</h1>
+
+      <div id="finalScores" class="stats-grid"></div>
+
+      <div id="winnerDisplay" class="winner-text"></div>
+
+      <div class="btn-row">
+        <button id="playAgainBtn" class="arcade-btn arcade-btn-primary">PLAY AGAIN</button>
+        <button id="returnToLobbyBtn" class="arcade-btn arcade-btn-secondary">RETURN TO LOBBY</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── CHALLENGE MODAL ──────────────────────────── -->
+  <div id="challengeModal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-title">GAME<br>INVITATION!</div>
+      <div class="modal-text"><span id="challengerName" class="highlight">PLAYER</span> WANTS TO<br>CHALLENGE YOU!</div>
+      <div class="modal-buttons">
+        <button id="acceptChallengeBtn" class="arcade-btn arcade-btn-primary">ACCEPT</button>
+        <button id="declineChallengeBtn" class="arcade-btn arcade-btn-danger">DECLINE</button>
+      </div>
+      <p id="challengeTimer" class="modal-timer"></p>
+    </div>
+  </div>
+
+  <!-- ── CHALLENGE SENT MODAL ─────────────────────── -->
+  <div id="challengeSentModal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-title">CHALLENGE<br>SENT!</div>
+      <div class="modal-text">WAITING FOR <span id="targetName" class="highlight">PLAYER</span> TO<br>RESPOND...</div>
+      <button id="cancelChallengeBtn" class="arcade-btn arcade-btn-danger">CANCEL</button>
+      <p id="sentChallengeTimer" class="modal-timer"></p>
+    </div>
+  </div>
+
+  <audio id="challengeSound" preload="auto">
+    <source src="/sounds/challenge.mp3" type="audio/mpeg">
+  </audio>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
