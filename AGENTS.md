@@ -1,4 +1,4 @@
-# Letter Shuffle - Multiplayer Word Battle
+# WordBridge - Multiplayer Word Battle
 
 ## Overview
 1v1 real-time word game where two players compete to find words matching shared letter pairs.
@@ -100,3 +100,29 @@ The client connects automatically via:
 ## File Cleanup
 - `script.js` - Removed (replaced by `game.js`)
 - `wordlist.txt` - Unused legacy file
+
+## Anti-Patterns (THIS PROJECT)
+- Frontend assets at root instead of `public/` directory
+- `word_lookup.json` and `build_lookup.js` at root instead of `data/`/`scripts/`
+- No tests directory - project lacks test scaffold
+- No ESLint/Prettier config - no enforced code style
+- `express.static(__dirname)` serves entire repo (security surface)
+
+## Unique Styles
+- Server reads `word_lookup.json` at startup via relative path
+- Single-page app with screen-state machine (lobby→waiting→ready→game→results→end)
+- Server-side synchronized timer (deadline passed to client)
+
+## Commands
+```bash
+npm install     # Install dependencies
+npm start       # Start server (node server.js)
+node build_lookup.js  # Rebuild word_lookup.json from source
+```
+
+## Notes
+- `words_full.,txt` has typo in filename (trailing comma)
+- `style.css` referenced in index.html but must exist at same path
+- Room codes are 6-char uppercase alphanumeric
+- No persistent storage - rooms auto-cleanup when empty
+- `Q→Y` special case: words starting with `qu-` treated as ending in `Y`

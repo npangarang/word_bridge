@@ -1,4 +1,24 @@
-const socket = io();
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+const socket = io({
+  transports: isIOS ? ['polling', 'websocket'] : ['websocket', 'polling'],
+  reconnection: true,
+  reconnectionAttempts: 10,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !socket.connected) {
+    socket.connect();
+  }
+});
+
+window.addEventListener('offline', () => socket.disconnect());
+window.addEventListener('online', () => {
+  if (!socket.connected) socket.connect();
+});
 
 let myPlayerId = null;
 let myRoomCode = null;
@@ -193,7 +213,7 @@ $('returnToLobbyBtn').addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !submitted) {
+  if (e.code === 'Space') {
     const activeScreen = document.querySelector('.screen.active');
     if (activeScreen && (activeScreen.id === 'readyScreen' || activeScreen.id === 'resultScreen')) {
       e.preventDefault();

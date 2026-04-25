@@ -1,7 +1,7 @@
 {
-  "name": "letter-shuffle-multiplayer",
+  "name": "wordbridge",
   "version": "1.0.0",
-  "description": "1v1 word guessing game over local network",
+  "description": "1v1 real-time word game - bridge from start letter to end letter",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
