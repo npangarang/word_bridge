@@ -2,6 +2,8 @@
 
 A 1v1 real-time multiplayer word game where two players compete to find words matching shared letter pairs.
 
+![WordBridge UI](screenshot.png)
+
 ## Quick Start
 
 ```bash
