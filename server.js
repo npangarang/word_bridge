@@ -655,7 +655,7 @@ app.get('/word_lookup.json', (req, res) => {
   res.sendFile(path.join(__dirname, 'word_lookup.json'));
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  console.log('Open this URL in two browser tabs to test multiplayer');
+  console.log(`LAN access: http://<your-LAN-IP>:${PORT}`);
 });
