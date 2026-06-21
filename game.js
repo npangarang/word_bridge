@@ -62,7 +62,10 @@ function loadWordLookup() {
   return fetch('/word_lookup.json')
     .then(r => r.json())
     .then(data => {
-      wordLookupClient = data;
+      wordLookupClient = {};
+      for (const key of Object.keys(data)) {
+        wordLookupClient[key] = new Set(data[key]);
+      }
       console.log('Word lookup loaded:', Object.keys(wordLookupClient).length, 'pairs');
     })
     .catch(err => console.error('Failed to load word lookup:', err));
@@ -78,8 +81,8 @@ function validateClientWord(word, startLetter, endLetter) {
   if (!w.endsWith(e)) return { valid: false, reason: `Word must end with ${e.toUpperCase()}` };
 
   const key = s + e;
-  const words = wordLookupClient[key] || [];
-  if (!words.includes(w)) return { valid: false, reason: 'Word not in dictionary' };
+  const words = wordLookupClient[key];
+  if (!words || !words.has(w)) return { valid: false, reason: 'Word not in dictionary' };
 
   return { valid: true };
 }

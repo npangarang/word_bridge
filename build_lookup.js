@@ -1,6 +1,6 @@
 const fs = require('fs');
 
-const INPUT_FILE = './words_full.,txt';
+const INPUT_FILE = './words_scowl70.txt';
 const OUTPUT_FILE = './word_lookup.json';
 
 const MIN_LEN = 3;
@@ -69,7 +69,12 @@ for (const key of keys) {
   lookup[key].sort();
 }
 
-fs.writeFileSync(OUTPUT_FILE, JSON.stringify(lookup, null, 2));
+const sortedLookup = {};
+for (const key of keys) {
+  sortedLookup[key] = lookup[key];
+}
+
+fs.writeFileSync(OUTPUT_FILE, JSON.stringify(sortedLookup, null, 2));
 console.log(`Written to ${OUTPUT_FILE}`);
 
 console.log('\nTop 10 buckets by word count:');
@@ -85,7 +90,7 @@ console.log('\nBuckets with 0 words (if any):');
 const emptyCount = keys.filter(k => lookup[k].length === 0).length;
 console.log(`  ${emptyCount} empty buckets`);
 
-const sampleKeys = ['at', 'be', 'ing', 'tion', 'qy'];
+const sampleKeys = ['at', 'be', 'ig', 'tn', 'qy'];
 console.log('\nSample lookups:');
 for (const k of sampleKeys) {
   const words = lookup[k] || [];

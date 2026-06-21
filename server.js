@@ -20,11 +20,15 @@ const PAUSE_TIME = 3;
 const TOTAL_ROUNDS = 10;
 const CHALLENGE_TIMEOUT = 30;
 
-const wordLookup = JSON.parse(fs.readFileSync('./word_lookup.json', 'utf8'));
+const wordLookupRaw = JSON.parse(fs.readFileSync('./word_lookup.json', 'utf8'));
+const wordLookup = {};
+for (const key of Object.keys(wordLookupRaw)) {
+  wordLookup[key] = new Set(wordLookupRaw[key]);
+}
 
 const validCombinations = new Set();
 for (const key of Object.keys(wordLookup)) {
-  if (wordLookup[key] && wordLookup[key].length > 0) {
+  if (wordLookup[key] && wordLookup[key].size > 0) {
     validCombinations.add(key);
   }
 }
@@ -60,8 +64,8 @@ function validateWord(word, startLetter, endLetter) {
   if (w.includes('--')) return false;
 
   const key = s + e;
-  const words = wordLookup[key] || [];
-  return words.includes(w);
+  const words = wordLookup[key];
+  return words ? words.has(w) : false;
 }
 
 function getOnlinePlayersList() {
@@ -568,8 +572,8 @@ function endRound(roomCode) {
 
   let examples = null;
   if (validSubmissions.length === 0 && room.currentPair) {
-    const pairWords = wordLookup[room.currentPair] || [];
-    examples = pairWords.slice(0, 5);
+    const pairWords = wordLookup[room.currentPair];
+    examples = pairWords ? [...pairWords].slice(0, 5) : null;
   }
 
   io.to(roomCode).emit('roundEnd', {
