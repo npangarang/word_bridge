@@ -14,7 +14,7 @@ const io = new Server(server, {
   connectTimeout: 45000
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const ROUND_TIME = 10;
 const PAUSE_TIME = 3;
 const TOTAL_ROUNDS = 10;
@@ -651,6 +651,8 @@ function endGame(roomCode) {
 
   broadcastOnlinePlayers();
 }
+
+app.get('/health', (req, res) => res.status(200).send('ok'));
 
 app.use(express.static(__dirname));
 app.use('/sounds', express.static(path.join(__dirname, 'sounds')));
