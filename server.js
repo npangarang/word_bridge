@@ -393,6 +393,19 @@ io.on('connection', (socket) => {
     checkRoundComplete(roomCode);
   });
 
+  socket.on('sendReaction', (emoji) => {
+    const playerData = onlinePlayers.get(socket.id);
+    if (!playerData || !playerData.roomCode) return;
+    const roomCode = playerData.roomCode;
+    const room = rooms.get(roomCode);
+    if (!room) return;
+    // Relay to the other player in the room
+    socket.to(roomCode).emit('reactionReceived', {
+      emoji,
+      fromId: socket.id
+    });
+  });
+
   socket.on('playerReady', () => {
     const playerData = onlinePlayers.get(socket.id);
     if (!playerData || !playerData.roomCode) return;
@@ -590,8 +603,14 @@ function endRound(roomCode) {
     p.ready = false;
   });
   room.submissions = {};
-  room.state = 'waiting_for_ready';
 
+  // After the final round, go straight to game end
+  if (room.currentRound >= TOTAL_ROUNDS) {
+    startNextRound(roomCode);
+    return;
+  }
+
+  room.state = 'waiting_for_ready';
   io.to(roomCode).emit('waitingForReady');
 }
 

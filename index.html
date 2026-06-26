@@ -15,6 +15,13 @@
 
       <div class="input-group" style="margin-top: 32px;">
         <input type="text" id="playerNameInput" class="arcade-input" placeholder="Enter your name" maxlength="20" />
+
+        <div id="profileIndicator" class="profile-indicator" style="display:none;">
+          <span id="profileIndicatorEmoji"></span>
+          <span id="profileIndicatorName"></span>
+          <button id="profileIndicatorEditBtn" class="profile-edit-link">edit</button>
+        </div>
+
         <button id="enterLobbyBtn" class="arcade-btn arcade-btn-primary">ENTER LOBBY</button>
       </div>
 
@@ -25,13 +32,26 @@
     <div id="lobbyScreen" class="screen">
       <div class="lobby-header">
         <h1 class="arcade-title small">LOBBY</h1>
-        <button id="editNameBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small">EDIT NAME</button>
+        <div class="lobby-actions">
+          <button id="editNameBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small">EDIT NAME</button>
+          <button id="profileBtn" class="arcade-btn arcade-btn-small profile-btn" title="Edit Profile">
+            <svg viewBox="0 0 20 20" class="btn-icon" width="12" height="12"><circle cx="10" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 20c0-4 3-7 7-7s7 3 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Profile
+          </button>
+        </div>
       </div>
       <p class="online-count">PLAYERS ONLINE: <span id="onlineCount">0</span></p>
 
       <div id="onlinePlayers" class="players-list"></div>
 
       <button id="refreshLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" style="margin-top: 8px;">REFRESH</button>
+
+      <div id="h2hSection" class="h2h-section">
+        <div class="arcade-subtitle">Head-to-Head</div>
+        <div id="h2hList" class="h2h-list">
+          <p class="h2h-empty">No matches yet</p>
+        </div>
+      </div>
     </div>
 
     <!-- ── READY SCREEN ─────────────────────────────── -->
@@ -64,6 +84,17 @@
       <input type="text" id="wordInput" class="word-input" placeholder="TYPE A WORD..." maxlength="20" autocomplete="off" />
 
       <p class="submit-hint">PRESS ENTER TO SUBMIT</p>
+
+      <div class="reactions-bar" id="gameReactions">
+        <button class="reaction-btn" data-emoji="💨">💨</button>
+        <button class="reaction-btn" data-emoji="😂">😂</button>
+        <button class="reaction-btn" data-emoji="😱">😱</button>
+        <button class="reaction-btn" data-emoji="🔥">🔥</button>
+        <button class="reaction-btn" data-emoji="👏">👏</button>
+        <button class="reaction-btn" data-emoji="😢">😢</button>
+        <button class="reaction-btn" data-emoji="💀">💀</button>
+        <button class="reaction-btn" data-emoji="🤯">🤯</button>
+      </div>
     </div>
 
     <!-- ── RESULT SCREEN ────────────────────────────── -->
@@ -76,6 +107,17 @@
 
       <div class="scores" id="resultScores"></div>
 
+      <div class="reactions-bar" id="resultReactions">
+        <button class="reaction-btn" data-emoji="💨">💨</button>
+        <button class="reaction-btn" data-emoji="😂">😂</button>
+        <button class="reaction-btn" data-emoji="😱">😱</button>
+        <button class="reaction-btn" data-emoji="🔥">🔥</button>
+        <button class="reaction-btn" data-emoji="👏">👏</button>
+        <button class="reaction-btn" data-emoji="😢">😢</button>
+        <button class="reaction-btn" data-emoji="💀">💀</button>
+        <button class="reaction-btn" data-emoji="🤯">🤯</button>
+      </div>
+
       <p id="waitingStatus" class="waiting-text" style="display: none;"></p>
       <button id="readyUpBtn" class="arcade-btn arcade-btn-primary ready-btn" style="margin-top: 16px; display: none;">READY UP</button>
     </div>
@@ -85,6 +127,11 @@
       <h1 class="arcade-title">GAME<br>OVER</h1>
 
       <div id="finalScores" class="stats-grid"></div>
+
+      <div id="h2hSummary" class="h2h-summary" style="display:none;">
+        <div class="arcade-subtitle">Record vs Opponent</div>
+        <div id="h2hSummaryContent"></div>
+      </div>
 
       <div id="winnerDisplay" class="winner-text"></div>
 
@@ -115,6 +162,57 @@
       <div class="modal-text">WAITING FOR <span id="targetName" class="highlight">PLAYER</span> TO<br>RESPOND...</div>
       <button id="cancelChallengeBtn" class="arcade-btn arcade-btn-danger">CANCEL</button>
       <p id="sentChallengeTimer" class="modal-timer"></p>
+    </div>
+  </div>
+
+  <!-- ── PROFILE MODAL ───────────────────────────── -->
+  <div id="profileModal" class="modal-overlay">
+    <div class="modal-content profile-modal-content">
+      <div class="modal-title">PROFILE</div>
+      <p class="modal-text">Choose your avatar</p>
+      <div id="profileEmojiGrid" class="emoji-grid">
+        <button class="emoji-option" data-emoji="diamond" style="color:var(--neon-cyan)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,2 22,12 12,22 2,12" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="circle" style="color:var(--neon-green)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="square" style="color:var(--neon-magenta)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><rect x="3" y="3" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"/><line x1="7" y1="7" x2="17" y2="17" stroke="currentColor" stroke-width="2"/><line x1="17" y1="7" x2="7" y2="17" stroke="currentColor" stroke-width="2"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="triangle" style="color:var(--neon-yellow)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,3 22,20 2,20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="star" style="color:var(--neon-orange)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,2 15,9 23,9 16,14 18,22 12,17 6,22 8,14 1,9 9,9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="heart" style="color:#ff4488">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><path d="M12 22C12 22 2 14 2 8c0-3 2.5-5 5-5 1.5 0 3 1 4.5 2.5C13 4 14.5 3 16 3c2.5 0 5 2 5 5 0 6-9 14-9 14z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="hexagon" style="color:var(--neon-cyan)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="cross" style="color:var(--neon-green)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><rect x="9" y="4" width="6" height="16" rx="1.5" fill="currentColor"/><rect x="4" y="9" width="16" height="6" rx="1.5" fill="currentColor"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="eye" style="color:var(--neon-yellow)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="bolt" style="color:var(--neon-orange)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="13,2 3,13 10,13 8,22 19,10 12,10 15,2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="shield" style="color:#ff44ff">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><path d="M12 2L4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6L12 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="emoji-option" data-emoji="sparkle" style="color:var(--neon-cyan)">
+          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,1 14,9 22,11 14,13 12,21 10,13 2,11 10,9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <input id="profileNameInput" class="arcade-input" maxlength="20" placeholder="Your name">
+      <div class="modal-buttons">
+        <button id="cancelProfileBtn" class="arcade-btn arcade-btn-secondary">Cancel</button>
+        <button id="saveProfileBtn" class="arcade-btn arcade-btn-primary">Save</button>
+      </div>
     </div>
   </div>
 
