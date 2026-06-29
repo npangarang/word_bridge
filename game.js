@@ -20,11 +20,13 @@ window.addEventListener('online', () => {
   if (!socket.connected) socket.connect();
 });
 
+// === State ===
 let myPlayerId = null;
 let myRoomCode = null;
 let myName = null;
 let isHost = false;
-let opponentName = null;
+let players = [];           // all players in current room [{id,name,ready}]
+let roomHostId = null;
 let currentRound = 0;
 let roundDeadline = null;
 let currentStartLetter = null;
@@ -32,9 +34,7 @@ let currentEndLetter = null;
 let timerInterval = null;
 let submitted = false;
 let wordLookupClient = {};
-let currentChallengeId = null;
-let challengeTimeoutInterval = null;
-const CHALLENGE_TIMEOUT_SECONDS = 30;
+let autoJoinRoomCode = null;  // from URL param ?room=
 
 const $ = id => document.getElementById(id);
 
@@ -91,7 +91,6 @@ function sfxWin() {
 }
 function sfxLose() { playSweep(400, 100, 0.4, 'sawtooth'); }
 function sfxReady() { playBeep(700, 0.06); setTimeout(() => playBeep(1000, 0.08), 60); }
-let sfxTimerWarningInterval = null;
 
 function showScreen(screenId, instant = false) {
   const current = document.querySelector('.screen.active');
@@ -109,9 +108,8 @@ function showScreen(screenId, instant = false) {
   }
 }
 
-// === Profile & H2H storage ===
+// === Profile storage ===
 const STORAGE_PROFILE = 'wb_profile';
-const STORAGE_H2H = 'wb_h2h';
 
 function loadProfile() {
   try { return JSON.parse(localStorage.getItem(STORAGE_PROFILE)); } catch(e) { return null; }
@@ -119,14 +117,6 @@ function loadProfile() {
 
 function saveProfile(profile) {
   localStorage.setItem(STORAGE_PROFILE, JSON.stringify(profile));
-}
-
-function loadH2H() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_H2H)) || {}; } catch(e) { return {}; }
-}
-
-function saveH2H(h2h) {
-  localStorage.setItem(STORAGE_H2H, JSON.stringify(h2h));
 }
 
 function animateValue(el, start, end, duration) {
@@ -173,34 +163,19 @@ function spawnConfetti(count) {
 
   container.appendChild(fragment);
 
-  // Clean up after animation
   setTimeout(() => {
     container.querySelectorAll('.confetti-particle').forEach(p => p.remove());
   }, 4500);
 }
 
-function showRoundBanner(text, isVS = false) {
+function showRoundBanner(text) {
   const existing = document.querySelector('.round-banner');
   if (existing) existing.remove();
   const banner = document.createElement('div');
-  banner.className = 'round-banner' + (isVS ? ' vs-banner' : '');
-  if (isVS) {
-    const profile = loadProfile();
-    banner.innerHTML = `
-      <div class="vs-player vs-you">
-        <span class="vs-avatar">${profile && profile.emoji ? getAvatarSVG(profile.emoji) : ''}</span>
-        <span class="vs-name">YOU</span>
-      </div>
-      <div class="vs-divider">VS</div>
-      <div class="vs-player vs-opponent">
-        <span class="vs-name">${escapeHtml(text)}</span>
-      </div>
-    `;
-  } else {
-    banner.textContent = text;
-  }
+  banner.className = 'round-banner';
+  banner.textContent = text;
   document.body.appendChild(banner);
-  setTimeout(() => banner.remove(), isVS ? 2000 : 1300);
+  setTimeout(() => banner.remove(), 1300);
 }
 
 function showFloatingReaction(emoji, x, y) {
@@ -209,10 +184,19 @@ function showFloatingReaction(emoji, x, y) {
   el.textContent = emoji;
   el.style.left = x + 'px';
   el.style.top = y + 'px';
-  // Random horizontal drift
   el.style.animationDuration = (Math.random() * 0.5 + 1.3) + 's';
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2000);
+}
+
+function showToast(msg) {
+  const existing = document.querySelector('.toast-notification');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = 'toast-notification';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
 
 const AVATAR_SVGS = {
@@ -249,52 +233,12 @@ const AVATAR_COLORS = {
   sparkle: 'var(--neon-cyan)'
 };
 
-function renderH2HList() {
-  const h2h = loadH2H();
-  const list = $('h2hList');
-  if (!list) return;
-
-  const entries = Object.entries(h2h).sort((a, b) => new Date(b[1].lastPlayed) - new Date(a[1].lastPlayed));
-
-  if (entries.length === 0) {
-    list.innerHTML = '<p class="h2h-empty">No matches yet</p>';
-    return;
-  }
-
-  list.innerHTML = entries.map(([name, record]) => `
-    <div class="h2h-row">
-      <span class="h2h-name">${escapeHtml(name)}</span>
-      <span class="h2h-stats">
-        <span class="h2h-win">W:${record.wins}</span>
-        <span class="h2h-loss">L:${record.losses}</span>
-        <span class="h2h-tie">T:${record.ties}</span>
-      </span>
-    </div>
-  `).join('');
-}
-
-function renderH2HSummary(opponentName, record) {
-  const summary = $('h2hSummary');
-  const content = $('h2hSummaryContent');
-  if (!summary || !content) return;
-
-  content.textContent = `${record.wins}W - ${record.losses}L - ${record.ties}T`;
-  summary.style.display = 'block';
-}
-
 function showError(msg, elementId) {
   const el = $(elementId);
+  if (!el) return;
   el.textContent = msg;
   el.style.display = 'block';
   setTimeout(() => el.style.display = 'none', 3000);
-}
-
-function playChallengeSound() {
-  const audio = $('challengeSound');
-  if (audio) {
-    audio.currentTime = 0;
-    audio.play().catch(e => console.log('Audio play failed:', e));
-  }
 }
 
 function loadWordLookup() {
@@ -326,39 +270,104 @@ function validateClientWord(word, startLetter, endLetter) {
   return { valid: true };
 }
 
-function updateOnlinePlayersList(players) {
+function updateOnlinePlayersList(list) {
   const container = $('onlinePlayers');
   const countEl = $('onlineCount');
   const prevCount = parseInt(countEl.textContent || '0');
-  countEl.textContent = players.length;
+  countEl.textContent = list.length;
 
-  if (players.length !== prevCount) {
+  if (list.length !== prevCount) {
     const onlineCountParent = $('onlineCount').parentElement;
     onlineCountParent.classList.remove('pulse');
     void onlineCountParent.offsetWidth;
     onlineCountParent.classList.add('pulse');
   }
 
-  container.innerHTML = players
+  container.innerHTML = list
     .filter(p => p.id !== myPlayerId)
     .map(p => `
       <div class="player-item">
         <div class="player-name">
           <span class="status-dot status-${p.status === 'online' ? 'online' : 'busy'}"></span>
-          <span class="player-name-text">${p.name}${p.id === myPlayerId ? ' (YOU)' : ''}</span>
+          <span class="player-name-text">${escapeHtml(p.name)}</span>
         </div>
-        ${p.status === 'online' && p.id !== myPlayerId ? `<button class="arcade-btn arcade-btn-magenta arcade-btn-small challenge-btn" data-id="${p.id}" data-name="${p.name}">CHALLENGE</button>` : ''}
         ${p.status !== 'online' ? '<span class="in-game-label">IN GAME</span>' : ''}
       </div>
     `).join('');
+}
 
-  container.querySelectorAll('.challenge-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const targetId = btn.dataset.id;
-      const targetName = btn.dataset.name;
-      socket.emit('sendChallenge', targetId);
-    });
-  });
+// === Room lobby rendering ===
+function renderRoomLobby() {
+  if (!myRoomCode) return;
+
+  // Segmented LCD-style room code
+  $('roomCodeValue').innerHTML = myRoomCode
+    .split('')
+    .map(c => `<span class="code-char">${escapeHtml(c)}</span>`)
+    .join('');
+
+  const list = $('roomPlayersList');
+  list.innerHTML = players.map(p => {
+    const isYou = p.id === myPlayerId;
+    const isRoomHost = p.id === roomHostId;
+    return `
+      <div class="player-item${p.ready ? ' ready' : ''}${isRoomHost ? ' host' : ''}">
+        <div class="player-name">
+          <span class="player-name-text">${escapeHtml(p.name)}${isYou ? ' (YOU)' : ''}${isRoomHost ? '<span class="host-crown">👑</span>' : ''}</span>
+        </div>
+        <span class="ready-badge ${p.ready ? 'ready-on' : 'ready-off'}">${p.ready ? 'READY' : '...'}</span>
+      </div>
+    `;
+  }).join('');
+
+  const readyCount = players.filter(p => p.ready).length;
+  $('roomReadyStatus').textContent = `${readyCount}/${players.length} ready`;
+
+  // Ready Up button reflects own state
+  const me = players.find(p => p.id === myPlayerId);
+  const readyBtn = $('readyUpLobbyBtn');
+  if (me && me.ready) {
+    readyBtn.textContent = 'READY';
+    readyBtn.disabled = true;
+    readyBtn.classList.remove('pulsing');
+  } else {
+    readyBtn.textContent = 'READY UP';
+    readyBtn.disabled = false;
+    readyBtn.classList.add('pulsing');
+  }
+
+  // Start Game button: host only, enabled when ≥2 players and all ready
+  const startBtn = $('startGameBtn');
+  if (isHost) {
+    startBtn.style.display = 'inline-block';
+    const allReady = players.length >= 2 && players.every(p => p.ready);
+    startBtn.disabled = !allReady;
+  } else {
+    startBtn.style.display = 'none';
+  }
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  // Fallback for older browsers / non-https
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
+function resetRoomState() {
+  myRoomCode = null;
+  isHost = false;
+  players = [];
+  roomHostId = null;
 }
 
 // === Reaction emoji system ===
@@ -374,7 +383,6 @@ document.querySelectorAll('.reaction-btn').forEach(btn => {
 });
 
 socket.on('reactionReceived', (data) => {
-  // Show opponent's reaction coming from the right side
   const x = window.innerWidth - 60 + Math.random() * 40;
   const y = window.innerHeight * 0.3 + Math.random() * 100;
   showFloatingReaction(data.emoji, x, y);
@@ -382,6 +390,7 @@ socket.on('reactionReceived', (data) => {
 
 loadWordLookup();
 
+// === Name screen ===
 $('enterLobbyBtn').addEventListener('click', () => {
   const name = $('playerNameInput').value.trim();
   if (!name) {
@@ -411,50 +420,65 @@ $('refreshLobbyBtn').addEventListener('click', () => {
   socket.emit('requestOnlinePlayers');
 });
 
-$('acceptChallengeBtn').addEventListener('click', () => {
-  if (currentChallengeId) {
-    socket.emit('acceptChallenge', currentChallengeId);
-    hideChallengeModal();
-  }
+// === Room buttons ===
+$('createRoomBtn').addEventListener('click', () => {
+  if (!myName) return;
+  socket.emit('createRoom', myName);
 });
 
-$('declineChallengeBtn').addEventListener('click', () => {
-  if (currentChallengeId) {
-    socket.emit('declineChallenge', currentChallengeId);
-    hideChallengeModal();
-  }
+$('joinRoomInput').addEventListener('input', (e) => {
+  e.target.value = e.target.value.toUpperCase();
 });
 
-$('cancelChallengeBtn').addEventListener('click', () => {
-  if (currentChallengeId) {
-    socket.emit('cancelChallenge', currentChallengeId);
-    hideChallengeSentModal();
+$('joinRoomBtn').addEventListener('click', () => {
+  const code = $('joinRoomInput').value.trim();
+  if (!code) {
+    showError('Enter a room code', 'lobbyError');
+    return;
+  }
+  if (!myName) return;
+  socket.emit('joinRoom', { code, name: myName });
+});
+
+$('joinRoomInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    $('joinRoomBtn').click();
   }
 });
 
 $('readyUpLobbyBtn').addEventListener('click', () => {
   sfxReady();
-  socket.emit('playerReady');
-  $('readyUpLobbyBtn').disabled = true;
-  $('readyUpLobbyBtn').textContent = 'Waiting...';
-  $('readyUpLobbyBtn').classList.remove('pulsing');
+  // One-way ready — disable button to prevent double-ready
+  const me = players.find(p => p.id === myPlayerId);
+  if (me && !me.ready) {
+    me.ready = true;
+    renderRoomLobby();
+    socket.emit('readyUp');
+  }
 });
 
-$('readyUpBtn').addEventListener('click', () => {
-  sfxReady();
-  socket.emit('playerReady');
-  $('readyUpBtn').disabled = true;
-  $('readyUpBtn').textContent = 'Waiting...';
-  $('readyUpBtn').classList.remove('pulsing');
-  $('waitingStatus').style.display = 'block';
-  $('waitingStatus').textContent = 'Waiting for opponent...';
+$('startGameBtn').addEventListener('click', () => {
+  socket.emit('startGame');
 });
 
-$('leaveRoomBtn').addEventListener('click', () => {
+$('leaveRoomLobbyBtn').addEventListener('click', () => {
   socket.emit('leaveRoom');
-  showScreen('lobbyScreen');
 });
 
+$('copyRoomCodeBtn').addEventListener('click', () => {
+  if (myRoomCode) {
+    copyToClipboard(myRoomCode).then(() => showToast('Room code copied!'));
+  }
+});
+
+$('copyInviteLinkBtn').addEventListener('click', () => {
+  if (myRoomCode) {
+    const link = window.location.origin + '/?room=' + myRoomCode;
+    copyToClipboard(link).then(() => showToast('Invite link copied!'));
+  }
+});
+
+// === Word input ===
 $('wordInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !submitted) {
     const word = $('wordInput').value.trim();
@@ -486,15 +510,16 @@ $('wordInput').addEventListener('keydown', (e) => {
   }
 });
 
+// === End screen buttons ===
 $('playAgainBtn').addEventListener('click', () => {
   socket.emit('restartGame');
 });
 
 $('returnToLobbyBtn').addEventListener('click', () => {
   socket.emit('returnToLobby');
+  resetRoomState();
   showScreen('lobbyScreen');
   socket.emit('requestOnlinePlayers');
-  renderH2HList();
 });
 
 // === Profile modal handlers ===
@@ -527,6 +552,36 @@ $('profileModal').addEventListener('click', (e) => {
   if (e.target === $('profileModal')) closeProfileModal();
 });
 
+// === Tutorial (How to Play) modal ===
+function openTutorialModal() {
+  $('tutorialModal').classList.add('active');
+  sfxReady();
+}
+
+function closeTutorialModal() {
+  $('tutorialModal').classList.remove('active');
+}
+
+$('howToPlayBtn').addEventListener('click', openTutorialModal);
+$('tutorialClose').addEventListener('click', closeTutorialModal);
+$('tutorialGotItBtn').addEventListener('click', closeTutorialModal);
+
+// Close when clicking the backdrop (outside the card).
+// stopPropagation on the card itself prevents backdrop click-through.
+const tutorialCard = document.querySelector('.tutorial-modal-content');
+if (tutorialCard) {
+  tutorialCard.addEventListener('click', (e) => e.stopPropagation());
+}
+$('tutorialModal').addEventListener('click', (e) => {
+  if (e.target === $('tutorialModal')) closeTutorialModal();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('tutorialModal').classList.contains('active')) {
+    closeTutorialModal();
+  }
+});
+
 document.querySelectorAll('.emoji-option').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.emoji-option').forEach(b => b.classList.remove('selected'));
@@ -553,18 +608,7 @@ $('saveProfileBtn').addEventListener('click', () => {
   closeProfileModal();
 });
 
-document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space') {
-    const activeScreen = document.querySelector('.screen.active');
-    if (activeScreen && (activeScreen.id === 'readyScreen' || activeScreen.id === 'resultScreen')) {
-      e.preventDefault();
-      const readyBtn = activeScreen.id === 'readyScreen' ? $('readyUpLobbyBtn') : $('readyUpBtn');
-      if (readyBtn && !readyBtn.disabled) {
-        readyBtn.click();
-      }
-    }
-  }
-});
+// === Socket event handlers ===
 
 socket.on('nameConfirmed', (data) => {
   myPlayerId = data.playerId;
@@ -577,9 +621,14 @@ socket.on('nameConfirmed', (data) => {
     emoji: existingProfile ? existingProfile.emoji : 'diamond'
   });
 
-  showScreen('lobbyScreen');
-  socket.emit('requestOnlinePlayers');
-  renderH2HList();
+  // Auto-join if URL had ?room=code — skip lobby, go straight to room
+  if (autoJoinRoomCode && myName) {
+    socket.emit('joinRoom', { code: autoJoinRoomCode, name: myName });
+    autoJoinRoomCode = null;
+  } else {
+    showScreen('lobbyScreen');
+    socket.emit('requestOnlinePlayers');
+  }
 });
 
 socket.on('onlinePlayers', (players) => {
@@ -587,135 +636,88 @@ socket.on('onlinePlayers', (players) => {
 });
 
 socket.on('error', (data) => {
-  showError(data.message, 'nameError');
-});
-
-socket.on('challengeReceived', (data) => {
-  currentChallengeId = data.challengeId;
-  $('challengerName').textContent = data.challengerName;
-  showChallengeModal();
-  playChallengeSound();
-  startChallengeTimer(CHALLENGE_TIMEOUT_SECONDS);
-});
-
-socket.on('challengeSent', (data) => {
-  currentChallengeId = data.challengeId;
-  $('targetName').textContent = data.targetName;
-  showChallengeSentModal();
-  startSentChallengeTimer(CHALLENGE_TIMEOUT_SECONDS);
-});
-
-socket.on('challengeDeclined', (data) => {
-  hideChallengeSentModal();
-  alert(`${data.declinerName} declined your challenge`);
-});
-
-socket.on('challengeEnded', () => {
-  hideChallengeModal();
-  hideChallengeSentModal();
-  currentChallengeId = null;
-});
-
-socket.on('challengeTimeout', () => {
-  hideChallengeModal();
-  hideChallengeSentModal();
-  currentChallengeId = null;
-  alert('Challenge timed out');
-});
-
-function showChallengeModal() {
-  $('challengeModal').classList.add('active');
-  $('challengeTimer').textContent = '';
-}
-
-function hideChallengeModal() {
-  $('challengeModal').classList.remove('active');
-  clearInterval(challengeTimeoutInterval);
-  currentChallengeId = null;
-}
-
-function showChallengeSentModal() {
-  $('challengeSentModal').classList.add('active');
-  $('sentChallengeTimer').textContent = '';
-}
-
-function hideChallengeSentModal() {
-  $('challengeSentModal').classList.remove('active');
-  clearInterval(challengeTimeoutInterval);
-  currentChallengeId = null;
-}
-
-function startChallengeTimer(seconds) {
-  clearInterval(challengeTimeoutInterval);
-  let remaining = seconds;
-  $('challengeTimer').textContent = `Time remaining: ${remaining}s`;
-
-  challengeTimeoutInterval = setInterval(() => {
-    remaining--;
-    $('challengeTimer').textContent = `Time remaining: ${remaining}s`;
-    if (remaining <= 0) {
-      clearInterval(challengeTimeoutInterval);
-    }
-  }, 1000);
-}
-
-function startSentChallengeTimer(seconds) {
-  clearInterval(challengeTimeoutInterval);
-  let remaining = seconds;
-  $('sentChallengeTimer').textContent = `Time remaining: ${remaining}s`;
-
-  challengeTimeoutInterval = setInterval(() => {
-    remaining--;
-    $('sentChallengeTimer').textContent = `Time remaining: ${remaining}s`;
-    if (remaining <= 0) {
-      clearInterval(challengeTimeoutInterval);
-    }
-  }, 1000);
-}
-
-socket.on('gameStart', (data) => {
-  myPlayerId = socket.id;
-  myRoomCode = data.roomCode;
-  isHost = data.isHost;
-  currentRound = data.round;
-  roundDeadline = data.deadline;
-  currentStartLetter = data.startLetter;
-  currentEndLetter = data.endLetter;
-
-  opponentName = data.players.find(p => p.id !== socket.id)?.name || 'Opponent';
-
-  $('currentRound').textContent = data.round;
-  $('tile1').textContent = data.startLetter;
-  $('tile2').textContent = data.endLetter;
-  $('tile1').classList.remove('bounce-in');
-  $('tile2').classList.remove('bounce-in');
-  void $('tile1').offsetWidth;
-  $('tile1').classList.add('bounce-in');
-  $('tile2').classList.add('bounce-in');
-  $('wordInput').value = '';
-  $('wordInput').disabled = false;
-  $('wordInput').classList.remove('invalid-input');
-  $('wordInput').focus();
-  $('opponentStatus').textContent = '';
-
-  submitted = false;
-  hideChallengeModal();
-  hideChallengeSentModal();
-
-  showScreen('gameScreen');
-  showRoundBanner(opponentName, true);
-  startTimer();
-});
-
-socket.on('playerSubmitted', (data) => {
-  if (data.playerId !== myPlayerId) {
-    const status = $('opponentStatus');
-    status.textContent = `${opponentName} submitted!`;
-    status.classList.add('submitted-flash');
-    setTimeout(() => status.classList.remove('submitted-flash'), 800);
+  // Show on whichever error element is currently visible/active
+  const lobbyErr = $('lobbyError');
+  const nameErr = $('nameError');
+  if (lobbyErr && lobbyErr.offsetParent !== null) {
+    showError(data.message, 'lobbyError');
+  } else if (nameErr && nameErr.offsetParent !== null) {
+    showError(data.message, 'nameError');
+  } else {
+    showToast(data.message);
   }
 });
 
+// === Room events ===
+socket.on('roomCreated', (data) => {
+  myRoomCode = data.code;
+  roomHostId = data.hostId;
+  isHost = true;
+  players = (data.players || []).map(p => ({ ...p }));
+  renderRoomLobby();
+  showScreen('roomLobbyScreen');
+});
+
+socket.on('roomJoined', (data) => {
+  myRoomCode = data.code;
+  roomHostId = data.hostId;
+  isHost = (data.hostId === myPlayerId);
+  players = (data.players || []).map(p => ({ ...p }));
+  renderRoomLobby();
+  showScreen('roomLobbyScreen');
+});
+
+socket.on('playerJoined', (data) => {
+  const existing = players.find(p => p.id === data.player.id);
+  if (!existing) {
+    players.push({ ...data.player });
+  }
+  renderRoomLobby();
+});
+
+socket.on('playerLobbyReady', (data) => {
+  const p = players.find(p => p.id === data.playerId);
+  if (p) {
+    p.ready = true;
+  }
+  renderRoomLobby();
+});
+
+socket.on('playerLeft', (data) => {
+  players = (data.players || []).map(p => ({ ...p }));
+  roomHostId = data.hostId;
+  // If host changed and I am the new host, update flag
+  isHost = (roomHostId === myPlayerId);
+
+  // Check if I'm still in the room
+  if (!players.find(p => p.id === myPlayerId)) {
+    // I was removed - go to lobby
+    resetRoomState();
+    showScreen('lobbyScreen');
+    socket.emit('requestOnlinePlayers');
+    return;
+  }
+
+  // If game is in progress and a player left, show toast
+  const gameScreen = $('gameScreen');
+  const resultScreen = $('resultScreen');
+  const endScreen = $('endScreen');
+  const isMidGame = (gameScreen.classList.contains('active') ||
+                     resultScreen.classList.contains('active') ||
+                     endScreen.classList.contains('active'));
+  if (isMidGame) {
+    showToast('A player left the room');
+  }
+  renderRoomLobby();
+});
+
+socket.on('roomLeft', () => {
+  resetRoomState();
+  showScreen('lobbyScreen');
+  socket.emit('requestOnlinePlayers');
+});
+
+// === Round / game events ===
 socket.on('roundStart', (data) => {
   currentRound = data.round;
   roundDeadline = data.deadline;
@@ -724,6 +726,8 @@ socket.on('roundStart', (data) => {
   submitted = false;
 
   $('currentRound').textContent = data.round;
+  if ($('totalRounds')) $('totalRounds').textContent = data.totalRounds || 10;
+  if ($('gameRoomCode')) $('gameRoomCode').textContent = myRoomCode || '';
   $('tile1').textContent = data.startLetter;
   $('tile2').textContent = data.endLetter;
   $('tile1').classList.remove('bounce-in');
@@ -734,13 +738,26 @@ socket.on('roundStart', (data) => {
   $('wordInput').value = '';
   $('wordInput').disabled = false;
   $('wordInput').classList.remove('invalid-input');
+  $('wordInput').placeholder = 'TYPE A WORD...';
   $('wordInput').focus();
-  $('opponentStatus').textContent = '';
+  $('submissionsStatus').innerHTML = '';
 
   showScreen('gameScreen');
   showRoundBanner('ROUND ' + data.round);
   sfxRoundStart();
   startTimer();
+});
+
+socket.on('playerSubmitted', (data) => {
+  if (data.playerId === myPlayerId) return; // don't show own submission
+  const container = $('submissionsStatus');
+  if (!container) return;
+  if (container.querySelector(`[data-pid="${data.playerId}"]`)) return;
+  const el = document.createElement('div');
+  el.className = 'submission-item';
+  el.dataset.pid = data.playerId;
+  el.textContent = data.playerName;
+  container.appendChild(el);
 });
 
 socket.on('roundEnd', (data) => {
@@ -749,111 +766,107 @@ socket.on('roundEnd', (data) => {
   $('gameScreen').classList.remove('screen-critical');
   document.body.classList.remove('timer-critical');
 
-  const myResult = data.results.find(r => r.playerId === myPlayerId);
-  const oppResult = data.results.find(r => r.playerId !== myPlayerId);
-
   $('resultRound').textContent = data.round;
 
-  // Staggered card entries with round winner highlight
-  const roundWinnerId = !myResult || !oppResult ? null
-    : myResult.points > oppResult.points ? myPlayerId
-    : oppResult.points > myResult.points ? oppResult.playerId
-    : null;
+  // Determine round winner(s) by highest points (among valid submissions)
+  const validResults = data.results.filter(r => r.isValid);
+  let topPoints = -1;
+  let roundWinnerIds = [];
+  validResults.forEach(r => {
+    if (r.points > topPoints) {
+      topPoints = r.points;
+      roundWinnerIds = [r.playerId];
+    } else if (r.points === topPoints) {
+      roundWinnerIds.push(r.playerId);
+    }
+  });
+  const hasSingleWinner = roundWinnerIds.length === 1;
 
-  const resultsHTML = data.results.map((r, i) => `
-    <div class="result-card${r.playerId === roundWinnerId ? ' winner-card' : ''}" style="animation-delay: ${i * 0.15}s">
-      <div class="result-header">
-        <span class="result-player" style="color: ${r.playerId === myPlayerId ? 'var(--neon-green)' : 'var(--neon-magenta)'}">
-          ${r.playerId === roundWinnerId ? '👑 ' : ''}${r.playerId === myPlayerId ? 'YOU' : escapeHtml(opponentName)}
-        </span>
-        <span class="result-points">+${r.points} PTS</span>
+  // Result cards - one per player
+  const resultsHTML = data.results.map((r, i) => {
+    const isWinner = roundWinnerIds.includes(r.playerId);
+    return `
+      <div class="result-card${isWinner ? ' winner-card' : ''}" style="animation-delay: ${i * 0.1}s">
+        <div class="result-header">
+          <span class="result-player" style="color: ${r.playerId === myPlayerId ? 'var(--neon-green)' : 'var(--neon-magenta)'}">
+            ${isWinner && hasSingleWinner ? '👑 ' : ''}${r.playerId === myPlayerId ? 'YOU' : escapeHtml(r.name)}
+          </span>
+          <span class="result-points">+${r.points} PTS</span>
+        </div>
+        <div class="result-word">${r.word ? escapeHtml(r.word) : '(no word)'}</div>
+        <div class="result-meta">
+          ${r.isValid ? `GOT IT IN ${r.timeTaken.toFixed(1)}S` : 'INVALID WORD'}
+          ${r.bonus ? ' <span class="bonus">(+1 SPEED BONUS)</span>' : ''}
+        </div>
       </div>
-      <div class="result-word">${r.word}</div>
-      <div class="result-meta">
-        ${r.isValid ? `GOT IT IN ${r.timeTaken.toFixed(1)}S` : 'INVALID WORD'}
-        ${r.bonus ? ' <span class="bonus">(+1 SPEED BONUS)</span>' : ''}
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   $('resultCards').innerHTML = resultsHTML;
 
+  // Examples
   if (data.examples && data.examples.length > 0) {
     $('examplesContainer').innerHTML = `
       <p class="examples-label">VALID WORDS FOR ${data.pair[0]}...${data.pair[1]}:</p>
-      <p class="examples-words">${data.examples.join(', ')}</p>
+      <p class="examples-words">${data.examples.map(e => escapeHtml(e)).join(', ')}</p>
     `;
   } else {
     $('examplesContainer').innerHTML = '';
   }
 
-  // Bar chart scores
-  const myScore = myResult?.totalScore || 0;
-  const oppScore = oppResult?.totalScore || 0;
-  const maxScore = Math.max(myScore, oppScore, 1);
-  const myPct = (myScore / maxScore) * 100;
-  const oppPct = (oppScore / maxScore) * 100;
+  // Bar chart - all players
+  const scores = data.results.map(r => ({
+    name: r.name,
+    score: r.totalScore,
+    isMe: r.playerId === myPlayerId,
+    isWinner: roundWinnerIds.includes(r.playerId),
+  }));
+  const maxScore = Math.max(...scores.map(s => s.score), 1);
+  const colors = ['var(--neon-magenta)', 'var(--neon-cyan)', 'var(--neon-yellow)', 'var(--neon-orange)'];
 
-  const profile = loadProfile();
-  const myAvatar = profile && profile.emoji ? getAvatarSVG(profile.emoji) : '';
-  const roundWinner = myResult && oppResult
-    ? (myResult.points > oppResult.points ? 'you' : oppResult.points > myResult.points ? 'opp' : null)
-    : null;
-
-  $('resultScores').innerHTML = `
-    <div class="bar-row${roundWinner === 'you' ? ' round-winner' : ''}">
-      <div class="bar-player">
-        <span class="bar-avatar" style="color: ${AVATAR_COLORS[profile?.emoji] || 'var(--neon-cyan)'}">${myAvatar}</span>
-        <span class="bar-name" style="color: var(--neon-green)">YOU</span>
+  $('resultScores').innerHTML = scores.map((s, i) => {
+    const pct = (s.score / maxScore) * 100;
+    const color = s.isMe ? 'var(--neon-green)' : colors[(i - 1 + colors.length) % colors.length];
+    return `
+      <div class="bar-row${s.isWinner ? ' round-winner' : ''}">
+        <div class="bar-player">
+          <span class="bar-name" style="color: ${color}">${s.isMe ? 'YOU' : escapeHtml(s.name)}</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" data-target-width="${pct}" style="width: 0%; background: ${color}; box-shadow: inset 0 0 10px ${color}, 0 0 8px ${color};"></div>
+        </div>
+        <span class="bar-score" data-target-score="${s.score}" style="color: ${color};">0</span>
       </div>
-      <div class="bar-track">
-        <div class="bar-fill you-bar" id="myBar" style="width: 0%"></div>
-      </div>
-      <span class="bar-score you-score" id="myBarScore">0</span>
-    </div>
-    <div class="bar-row${roundWinner === 'opp' ? ' round-winner' : ''}">
-      <div class="bar-player">
-        <span class="bar-avatar" style="color: var(--neon-magenta)"></span>
-        <span class="bar-name" style="color: var(--neon-magenta)">${escapeHtml(opponentName)}</span>
-      </div>
-      <div class="bar-track">
-        <div class="bar-fill opp-bar" id="oppBar" style="width: 0%"></div>
-      </div>
-      <span class="bar-score opp-score" id="oppBarScore">0</span>
-    </div>
-  `;
+    `;
+  }).join('');
 
   // Animate bars and scores
   setTimeout(() => {
-    const myBar = $('myBar');
-    const oppBar = $('oppBar');
-    if (myBar) myBar.style.width = myPct + '%';
-    if (oppBar) oppBar.style.width = oppPct + '%';
-    animateValue($('myBarScore'), 0, myScore, 600);
-    animateValue($('oppBarScore'), 0, oppScore, 600);
+    document.querySelectorAll('#resultScores .bar-fill').forEach(bar => {
+      bar.style.width = bar.dataset.targetWidth + '%';
+    });
+    document.querySelectorAll('#resultScores .bar-score').forEach((el) => {
+      const target = parseInt(el.dataset.targetScore, 10);
+      animateValue(el, 0, target, 600);
+    });
   }, 100);
 
-  $('readyUpBtn').style.display = 'block';
-  $('readyUpBtn').disabled = false;
-  $('readyUpBtn').textContent = 'Ready Up';
-  $('readyUpBtn').classList.add('pulsing');
-  $('waitingStatus').style.display = 'none';
+  // No ready button between rounds - server auto-advances after pause
+  // Restart the auto-advance indicator animation by toggling it off→on
+  const advFill = document.querySelector('#autoAdvanceIndicator .auto-advance-fill');
+  if (advFill) {
+    advFill.style.animation = 'none';
+    void advFill.offsetWidth;
+    advFill.style.animation = '';
+  }
+  const advIndicator = $('autoAdvanceIndicator');
+  if (advIndicator) {
+    advIndicator.style.animation = 'none';
+    void advIndicator.offsetWidth;
+    advIndicator.style.animation = '';
+  }
 
   showScreen('resultScreen');
-});
-
-socket.on('waitingForReady', () => {
-  $('readyUpBtn').style.display = 'block';
-  $('readyUpBtn').disabled = false;
-  $('readyUpBtn').textContent = 'Ready Up';
-  $('waitingStatus').style.display = 'none';
-});
-
-socket.on('playerReady', (data) => {
-  if (data.playerId !== myPlayerId) {
-    $('waitingStatus').style.display = 'block';
-    $('waitingStatus').textContent = `${opponentName} is ready!`;
-  }
 });
 
 socket.on('gameEnd', (data) => {
@@ -862,79 +875,70 @@ socket.on('gameEnd', (data) => {
   $('gameScreen').classList.remove('screen-critical');
   document.body.classList.remove('timer-critical');
 
-  $('finalScores').innerHTML = data.players.map((p, i) => `
-    <div class="stat-item" style="animation-delay: ${i * 0.2}s">
-      <div class="stat-value">${p.score}</div>
-      <div class="stat-label">${p.name}</div>
-    </div>
-  `).join('');
+  // Rankings list - sort by score descending
+  const sortedRankings = [...(data.rankings || [])].sort((a, b) => b.score - a.score);
 
+  const rankingsHTML = sortedRankings.map((r, i) => {
+    const isMe = r.id === myPlayerId;
+    const rankClass = i === 0 ? 'rank-gold' : (i === 1 ? 'rank-silver' : (i === 2 ? 'rank-bronze' : 'rank-default'));
+    const place = i === 0 ? '1ST' : (i === 1 ? '2ND' : (i === 2 ? '3RD' : `${i + 1}TH`));
+    return `
+      <div class="ranking-row ${rankClass}${isMe ? ' me' : ''}">
+        <span class="rank-place">${place}</span>
+        <span class="rank-name">${escapeHtml(r.name)}${isMe ? ' (YOU)' : ''}</span>
+        <span class="rank-score">${r.score}</span>
+      </div>
+    `;
+  }).join('');
+
+  $('finalRankings').innerHTML = rankingsHTML;
+
+  // Winner display
   const winDisplay = $('winnerDisplay');
   winDisplay.classList.remove('win');
+  winDisplay.classList.remove('tie');
+  winDisplay.style.color = '';
 
   if (data.isTie) {
-    winDisplay.textContent = "It's a tie!";
-    winDisplay.style.color = 'var(--neon-yellow)';
+    winDisplay.textContent = 'TIE!';
+    winDisplay.classList.add('tie');
     sfxLose();
   } else {
-    const winner = data.players.find(p => p.id === data.winner);
-    const isWinner = data.winner === myPlayerId;
-    winDisplay.textContent = isWinner ? 'YOU WIN!' : `${winner.name} wins!`;
-    if (isWinner) {
+    const winner = (data.players || []).find(p => p.id === data.winnerId);
+    const isWinner = data.winnerId === myPlayerId;
+    if (data.forfeit) {
+      winDisplay.textContent = isWinner ? 'OPPONENT FORFEITED - YOU WIN!' : 'YOU FORFEITED';
+    } else {
+      winDisplay.textContent = isWinner ? 'YOU WIN!' : `${winner ? winner.name : 'Someone'} WINS!`;
+    }
+    if (isWinner && !data.forfeit) {
       winDisplay.classList.add('win');
       sfxWin();
       setTimeout(() => spawnConfetti(60), 400);
     } else {
-      winDisplay.style.color = 'var(--neon-red)';
       sfxLose();
     }
   }
 
-  // Update H2H record
-  if (data.players && opponentName && myName) {
-    const h2h = loadH2H();
-    const opponent = data.players.find(p => p.name !== myName);
-    if (opponent) {
-      const record = h2h[opponent.name] || { wins: 0, losses: 0, ties: 0 };
-      if (data.isTie) {
-        record.ties++;
-      } else if (data.winner === myPlayerId) {
-        record.wins++;
-      } else {
-        record.losses++;
-      }
-      record.lastPlayed = new Date().toISOString();
-      h2h[opponent.name] = record;
-      saveH2H(h2h);
-
-      // Show H2H summary on end screen
-      renderH2HSummary(opponent.name, record);
-    }
+  // Play Again: host only
+  if (isHost) {
+    $('playAgainBtn').style.display = 'inline-block';
+  } else {
+    $('playAgainBtn').style.display = 'none';
   }
 
   showScreen('endScreen');
 });
 
-socket.on('opponentLeft', () => {
-  clearInterval(timerInterval);
-  $('timerBar').classList.remove('critical');
-  $('gameScreen').classList.remove('screen-critical');
-  document.body.classList.remove('timer-critical');
-  alert(`${opponentName || 'Opponent'} left the game`);
-  showScreen('lobbyScreen');
-  socket.emit('requestOnlinePlayers');
-});
-
 socket.on('gameReset', (data) => {
-  $('readyUpLobbyBtn').disabled = false;
-  $('readyUpLobbyBtn').textContent = 'Ready Up';
-  $('readyUpLobbyBtn').classList.add('pulsing');
-  $('lobbyWaitingStatus').textContent = '';
-  const h2hSummary = $('h2hSummary');
-  if (h2hSummary) h2hSummary.style.display = 'none';
-  showScreen('readyScreen');
+  players = (data.players || []).map(p => ({ ...p }));
+  roomHostId = data.hostId;
+  isHost = (roomHostId === myPlayerId);
+  renderRoomLobby();
+  showScreen('roomLobbyScreen');
 });
 
+// === Timer ===
 function startTimer() {
   clearInterval(timerInterval);
 
@@ -983,14 +987,12 @@ function startTimer() {
   timerInterval = setInterval(updateTimer, 100);
 }
 
-// On page load, check for saved profile
+// === Init ===
 (function initProfile() {
   const profile = loadProfile();
   if (profile) {
-    // Pre-fill name input
     const nameInput = $('playerNameInput');
     if (nameInput) nameInput.value = profile.name || '';
-    // Show profile indicator on name screen
     const indicator = $('profileIndicator');
     if (indicator && profile.emoji) {
       $('profileIndicatorEmoji').innerHTML = getAvatarSVG(profile.emoji);
@@ -998,5 +1000,24 @@ function startTimer() {
       $('profileIndicatorName').textContent = profile.name || 'Player';
       indicator.style.display = 'flex';
     }
+  }
+
+  // Parse URL for ?room=CODE
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const roomCode = params.get('room');
+    if (roomCode) {
+      const code = roomCode.toUpperCase().trim();
+      // Always set auto-join — works even on fresh devices without a saved profile
+      autoJoinRoomCode = code;
+      // Pre-fill join input as fallback
+      const joinInput = $('joinRoomInput');
+      if (joinInput) joinInput.value = code;
+      // Show room code on name screen so user knows they're joining
+      const subtitle = document.querySelector('.arcade-subtitle');
+      if (subtitle) subtitle.textContent = 'JOIN ROOM ' + code;
+    }
+  } catch(e) {
+    console.warn('URL parse failed:', e);
   }
 })();
