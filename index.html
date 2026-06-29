@@ -11,7 +11,7 @@
     <!-- ── NAME SCREEN ──────────────────────────────── -->
     <div id="nameScreen" class="screen active">
       <h1 class="arcade-title">WORD<br>BRIDGE</h1>
-      <p class="arcade-subtitle">1V1 WORD BATTLE</p>
+      <button id="howToPlayBtn" class="how-to-play-btn" type="button">? HOW TO PLAY</button>
 
       <div class="input-group" style="margin-top: 32px;">
         <input type="text" id="playerNameInput" class="arcade-input" placeholder="Enter your name" maxlength="20" />
@@ -40,35 +40,50 @@
           </button>
         </div>
       </div>
-      <p class="online-count">PLAYERS ONLINE: <span id="onlineCount">0</span></p>
 
-      <div id="onlinePlayers" class="players-list"></div>
-
-      <button id="refreshLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" style="margin-top: 8px;">REFRESH</button>
-
-      <div id="h2hSection" class="h2h-section">
-        <div class="arcade-subtitle">Head-to-Head</div>
-        <div id="h2hList" class="h2h-list">
-          <p class="h2h-empty">No matches yet</p>
+      <div class="room-actions">
+        <button id="createRoomBtn" class="arcade-btn arcade-btn-primary">CREATE ROOM</button>
+        <div class="join-room-row">
+          <input id="joinRoomInput" class="arcade-input" placeholder="Room code" maxlength="6" />
+          <button id="joinRoomBtn" class="arcade-btn arcade-btn-secondary">JOIN</button>
         </div>
       </div>
+
+      <p id="lobbyError" class="error"></p>
+
+      <p class="online-count">PLAYERS ONLINE: <span id="onlineCount">0</span></p>
+      <div id="onlinePlayers" class="players-list"></div>
+      <button id="refreshLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" style="margin-top: 8px;">REFRESH</button>
     </div>
 
-    <!-- ── READY SCREEN ─────────────────────────────── -->
-    <div id="readyScreen" class="screen">
-      <h1 class="arcade-title small">READY!</h1>
-      <p class="arcade-subtitle" style="margin-bottom: 8px;">BOTH PLAYERS MUST READY UP</p>
-      <div id="readyPlayers" class="players-list"></div>
-      <p class="waiting-text" id="lobbyWaitingStatus"></p>
-      <button id="readyUpLobbyBtn" class="arcade-btn arcade-btn-primary">READY UP</button>
-      <button id="leaveRoomBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" style="margin-top: 10px;">LEAVE ROOM</button>
+    <!-- ── ROOM LOBBY SCREEN ────────────────────────── -->
+    <div id="roomLobbyScreen" class="screen">
+      <h1 class="arcade-title small">ROOM LOBBY</h1>
+      <div id="roomCodeDisplay" class="room-code-display">
+        <span class="room-code-label">ROOM CODE:</span>
+        <span id="roomCodeValue" class="room-code-value"></span>
+        <div class="room-code-buttons">
+          <button id="copyRoomCodeBtn" class="arcade-btn arcade-btn-small">COPY CODE</button>
+          <button id="copyInviteLinkBtn" class="arcade-btn arcade-btn-small">COPY LINK</button>
+        </div>
+      </div>
+      <div id="roomPlayersList" class="players-list"></div>
+      <p id="roomReadyStatus" class="waiting-text">0/0 ready</p>
+      <div class="room-lobby-btns">
+        <button id="readyUpLobbyBtn" class="arcade-btn arcade-btn-primary">READY UP</button>
+        <button id="startGameBtn" class="arcade-btn arcade-btn-primary" style="display:none;">START GAME</button>
+        <button id="leaveRoomLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small">LEAVE ROOM</button>
+      </div>
     </div>
 
     <!-- ── GAME SCREEN ──────────────────────────────── -->
     <div id="gameScreen" class="screen">
       <div class="game-header">
-        <span class="round-info">ROUND <span id="currentRound">1</span>/10</span>
-        <span id="opponentStatus" class="opponent-status"></span>
+        <div class="game-header-info">
+          <span class="round-info">ROUND <span id="currentRound">1</span>/<span id="totalRounds">10</span></span>
+          <span class="room-code-chip" id="gameRoomCode"></span>
+        </div>
+        <div id="submissionsStatus" class="submissions-status"></div>
       </div>
 
       <div class="tiles">
@@ -107,6 +122,11 @@
 
       <div class="scores" id="resultScores"></div>
 
+      <div class="auto-advance-indicator" id="autoAdvanceIndicator">
+        <span class="auto-advance-label">NEXT ROUND</span>
+        <div class="auto-advance-bar"><div class="auto-advance-fill"></div></div>
+      </div>
+
       <div class="reactions-bar" id="resultReactions">
         <button class="reaction-btn" data-emoji="💨">💨</button>
         <button class="reaction-btn" data-emoji="😂">😂</button>
@@ -117,51 +137,80 @@
         <button class="reaction-btn" data-emoji="💀">💀</button>
         <button class="reaction-btn" data-emoji="🤯">🤯</button>
       </div>
-
-      <p id="waitingStatus" class="waiting-text" style="display: none;"></p>
-      <button id="readyUpBtn" class="arcade-btn arcade-btn-primary ready-btn" style="margin-top: 16px; display: none;">READY UP</button>
     </div>
 
     <!-- ── END SCREEN ──────────────────────────────── -->
     <div id="endScreen" class="screen">
       <h1 class="arcade-title">GAME<br>OVER</h1>
 
-      <div id="finalScores" class="stats-grid"></div>
-
-      <div id="h2hSummary" class="h2h-summary" style="display:none;">
-        <div class="arcade-subtitle">Record vs Opponent</div>
-        <div id="h2hSummaryContent"></div>
-      </div>
+      <div id="finalRankings" class="rankings-list"></div>
 
       <div id="winnerDisplay" class="winner-text"></div>
 
       <div class="btn-row">
-        <button id="playAgainBtn" class="arcade-btn arcade-btn-primary">PLAY AGAIN</button>
+        <button id="playAgainBtn" class="arcade-btn arcade-btn-primary" style="display:none;">PLAY AGAIN</button>
         <button id="returnToLobbyBtn" class="arcade-btn arcade-btn-secondary">RETURN TO LOBBY</button>
       </div>
     </div>
   </div>
 
-  <!-- ── CHALLENGE MODAL ──────────────────────────── -->
-  <div id="challengeModal" class="modal-overlay">
-    <div class="modal-content">
-      <div class="modal-title">GAME<br>INVITATION!</div>
-      <div class="modal-text"><span id="challengerName" class="highlight">PLAYER</span> WANTS TO<br>CHALLENGE YOU!</div>
-      <div class="modal-buttons">
-        <button id="acceptChallengeBtn" class="arcade-btn arcade-btn-primary">ACCEPT</button>
-        <button id="declineChallengeBtn" class="arcade-btn arcade-btn-danger">DECLINE</button>
-      </div>
-      <p id="challengeTimer" class="modal-timer"></p>
-    </div>
-  </div>
+  <!-- ── TUTORIAL MODAL (HOW TO PLAY) ───────────── -->
+  <div id="tutorialModal" class="modal-overlay tutorial-overlay">
+    <div class="modal-content tutorial-modal-content">
+      <button id="tutorialClose" class="tutorial-close" type="button" aria-label="Close">×</button>
+      <div class="modal-title tutorial-title">HOW TO PLAY</div>
 
-  <!-- ── CHALLENGE SENT MODAL ─────────────────────── -->
-  <div id="challengeSentModal" class="modal-overlay">
-    <div class="modal-content">
-      <div class="modal-title">CHALLENGE<br>SENT!</div>
-      <div class="modal-text">WAITING FOR <span id="targetName" class="highlight">PLAYER</span> TO<br>RESPOND...</div>
-      <button id="cancelChallengeBtn" class="arcade-btn arcade-btn-danger">CANCEL</button>
-      <p id="sentChallengeTimer" class="modal-timer"></p>
+      <!-- STEP 1: SEE THE LETTERS -->
+      <div class="tutorial-step">
+        <div class="tutorial-step-label">1 <span class="tutorial-sep">·</span> SEE THE LETTERS</div>
+        <p class="tutorial-step-text">Each round reveals a start letter and an end letter.</p>
+        <div class="tutorial-letter-pair">
+          <span class="tutorial-letter start">A</span>
+          <span class="tutorial-letter-dots">· · ·</span>
+          <span class="tutorial-letter end">T</span>
+        </div>
+      </div>
+
+      <!-- STEP 2: BUILD A WORD -->
+      <div class="tutorial-step">
+        <div class="tutorial-step-label">2 <span class="tutorial-sep">·</span> BUILD A WORD</div>
+        <p class="tutorial-step-text">Type a real word that begins with A and ends with T.</p>
+        <p class="tutorial-step-note">Uses a standard English dictionary. Common country &amp; culture words (american, french, arab) are accepted. Offensive terms, personal names, and places are not.</p>
+        <div class="tutorial-typewriter" aria-hidden="true">
+          <span class="type-letter type-end" style="--i:0">A</span>
+          <span class="type-letter" style="--i:1">B</span>
+          <span class="type-letter" style="--i:2">O</span>
+          <span class="type-letter" style="--i:3">U</span>
+          <span class="type-letter type-end" style="--i:4">T</span>
+          <span class="type-cursor"></span>
+        </div>
+      </div>
+
+      <!-- STEP 3: SCORE POINTS -->
+      <div class="tutorial-step">
+        <div class="tutorial-step-label">3 <span class="tutorial-sep">·</span> SCORE POINTS</div>
+        <p class="tutorial-step-text">Word length is your score — fastest submit grabs a bonus.</p>
+        <div class="tutorial-score">
+          <span class="score-pts">5</span>
+          <span class="score-pts-label">PTS</span>
+          <span class="score-plus">+</span>
+          <span class="score-bonus">1 <span class="score-bolt">⚡</span></span>
+        </div>
+      </div>
+
+      <!-- STEP 4: RACE THE CLOCK -->
+      <div class="tutorial-step">
+        <div class="tutorial-step-label">4 <span class="tutorial-sep">·</span> RACE THE CLOCK</div>
+        <p class="tutorial-step-text">10 rounds · 10 seconds each · highest total wins.</p>
+        <div class="tutorial-countdown" aria-hidden="true">
+          <span class="countdown-num" style="--i:3">3</span>
+          <span class="countdown-num" style="--i:2">2</span>
+          <span class="countdown-num" style="--i:1">1</span>
+          <span class="countdown-num countdown-go" style="--i:0">GO</span>
+        </div>
+      </div>
+
+      <button id="tutorialGotItBtn" class="arcade-btn arcade-btn-primary tutorial-got-it">GOT IT</button>
     </div>
   </div>
 
@@ -215,10 +264,6 @@
       </div>
     </div>
   </div>
-
-  <audio id="challengeSound" preload="auto">
-    <source src="/sounds/challenge.mp3" type="audio/mpeg">
-  </audio>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="game.js"></script>
