@@ -240,8 +240,9 @@ function endRound(roomCode) {
     examples
   });
 
-  // Reset submissions for next round
+  // Reset submissions for next round and pause state
   room.players.forEach(p => { p.submission = null; });
+  room.state = 'paused';
 
   // After final round → end game
   if (room.currentRound >= TOTAL_ROUNDS) {
@@ -464,12 +465,9 @@ io.on('connection', (socket) => {
     if (!roomPlayer) return;
 
     roomPlayer.ready = true;
-    const readyCount = room.players.filter(p => p.ready).length;
 
     broadcastToRoom(player.roomCode, 'playerLobbyReady', {
-      playerId: socket.id,
-      readyCount,
-      totalCount: room.players.length
+      playerId: socket.id
     });
   });
 
@@ -489,6 +487,10 @@ io.on('connection', (socket) => {
     }
     if (room.players.length < 2) {
       socket.emit('error', { message: 'Need at least 2 players' });
+      return;
+    }
+    if (!room.players.every(p => p.ready)) {
+      socket.emit('error', { message: 'All players must be ready' });
       return;
     }
 
@@ -516,12 +518,11 @@ io.on('connection', (socket) => {
     console.log(`Game started in room ${player.roomCode} with ${room.players.length} players`);
   });
 
-  socket.on('leaveRoom', () => {
+  function handlePlayerLeaveRoom() {
     const player = onlinePlayers.get(socket.id);
     if (!player || !player.roomCode) return;
     const roomCode = player.roomCode;
 
-    // Reset player status
     player.status = 'online';
     player.roomCode = null;
     socket.leave(roomCode);
@@ -529,7 +530,9 @@ io.on('connection', (socket) => {
     removePlayerFromRoom(socket.id, roomCode, 'leave');
     socket.emit('roomLeft');
     broadcastOnlinePlayers();
-  });
+  }
+
+  socket.on('leaveRoom', handlePlayerLeaveRoom);
 
   // ── Gameplay ──────────────────────────────────────
 
@@ -602,19 +605,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('returnToLobby', () => {
-    const player = onlinePlayers.get(socket.id);
-    if (!player || !player.roomCode) return;
-    const roomCode = player.roomCode;
-
-    player.status = 'online';
-    player.roomCode = null;
-    socket.leave(roomCode);
-
-    removePlayerFromRoom(socket.id, roomCode, 'leave');
-    socket.emit('roomLeft');
-    broadcastOnlinePlayers();
-  });
+  socket.on('returnToLobby', handlePlayerLeaveRoom);
 
   // ── Disconnect ────────────────────────────────────
 
