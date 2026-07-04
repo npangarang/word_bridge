@@ -46,6 +46,8 @@ const roomTimers = new Map();
 const pauseTimers = new Map();
 const onlinePlayers = new Map();
 const disconnectTimers = new Map();
+const challenges = new Map();
+const CHALLENGE_TIMEOUT = 15000;
 
 // ── Helpers ──────────────────────────────────────────
 
@@ -163,6 +165,16 @@ function removePlayerFromRoom(socketId, roomCode, reason) {
     reassignHost(room);
   }
 
+  // Clear play-again votes when a player leaves
+  if (room.playAgainVotes) {
+    room.playAgainVotes.delete(socketId);
+    broadcastToRoom(roomCode, 'playAgainVote', {
+      voteCount: room.playAgainVotes.size,
+      playerCount: room.players.length,
+      votedId: null
+    });
+  }
+
   // If only 1 player remains and game is active, auto-end it
   if (room.players.length === 1 && room.state === 'playing') {
     const remaining = room.players[0];
@@ -253,9 +265,9 @@ function endRound(roomCode) {
     };
   });
 
-  // Examples if nobody got a valid word — must respect category filter
+  // Always provide examples for the round's letter pair — must respect category filter
   let examples = null;
-  if (validSubmissions.length === 0 && room.currentPair) {
+  if (room.currentPair) {
     const pairWords = wordLookup[room.currentPair];
     if (pairWords) {
       const hasActiveFilter = room.categories && Object.keys(room.categories).some(k => room.categories[k] === false);
@@ -331,6 +343,7 @@ function endGame(roomCode) {
   clearRoomTimer(roomCode);
   clearPauseTimer(roomCode);
   room.state = 'finished';
+  room.playAgainVotes = new Set();
 
   // Rankings
   const maxScore = Math.max(...room.players.map(p => p.score));
@@ -346,6 +359,57 @@ function endGame(roomCode) {
   });
 
   broadcastOnlinePlayers();
+}
+
+function forceStartGame(roomCode) {
+  const room = rooms.get(roomCode);
+  if (!room || room.state !== 'lobby') return;
+
+  // Compute category-filtered valid pairs (same logic as startGame handler)
+  const hasActiveFilter = room.categories && Object.keys(room.categories).some(k => room.categories[k] === false);
+  if (hasActiveFilter) {
+    const categoryPairs = new Set();
+    for (const key of validCombinations) {
+      const words = wordLookup[key];
+      for (const word of words) {
+        const wordCats = wordCategories[word];
+        if (wordCats && wordCats.length > 0 && wordCats.some(cat => room.categories[cat])) {
+          categoryPairs.add(key);
+          break;
+        }
+      }
+    }
+    if (categoryPairs.size === 0) {
+      // Fallback: use all pairs if no matches (shouldn't normally happen with default categories)
+      room.categoryPairs = null;
+    } else {
+      room.categoryPairs = categoryPairs;
+    }
+  } else {
+    room.categoryPairs = null;
+  }
+
+  room.players.forEach(p => {
+    p.score = 0;
+    p.ready = false;
+    p.submission = null;
+  });
+  room.currentRound = 1;
+  room.currentPair = getRandomPair(room.categoryPairs);
+  room.roundStartTime = Date.now();
+  room.state = 'playing';
+
+  broadcastToRoom(roomCode, 'roundStart', {
+    round: room.currentRound,
+    totalRounds: TOTAL_ROUNDS,
+    startLetter: room.currentPair[0].toUpperCase(),
+    endLetter: room.currentPair[1].toUpperCase(),
+    timeLeft: ROUND_TIME,
+    deadline: room.roundStartTime + ROUND_TIME * 1000
+  });
+
+  startRoundTimer(roomCode);
+  console.log(`Challenge game started in room ${roomCode}`);
 }
 
 // ── Socket Handlers ──────────────────────────────────
@@ -486,7 +550,7 @@ io.on('connection', (socket) => {
       currentPair: null,
       roundStartTime: 0,
       maxPlayers: MAX_PLAYERS,
-      categories: { noun: true, verb: true, adjective: true, adverb: true, countries: true, us_states: true, us_cities: true },
+      categories: { noun_adj_verb: true, countries: true, us_states: true, us_cities: true },
       categoryPairs: null
     };
 
@@ -605,7 +669,7 @@ io.on('connection', (socket) => {
     }
 
     // Validate shape: must be object with all expected boolean keys
-    const ALLOWED_CATEGORIES = ['noun', 'verb', 'adjective', 'adverb', 'countries', 'us_states', 'us_cities'];
+    const ALLOWED_CATEGORIES = ['noun_adj_verb', 'countries', 'us_states', 'us_cities'];
     const isValid = categories
       && typeof categories === 'object'
       && ALLOWED_CATEGORIES.every(k => typeof categories[k] === 'boolean');
@@ -702,6 +766,9 @@ io.on('connection', (socket) => {
       disconnectTimers.delete(socket.id);
     }
 
+    // Clean up any pending challenges involving this player
+    cleanupChallengesForPlayer(socket.id);
+
     const player = onlinePlayers.get(socket.id);
     if (!player || !player.roomCode) return;
     const roomCode = player.roomCode;
@@ -766,35 +833,259 @@ io.on('connection', (socket) => {
     });
   });
 
-  // ── Post-Game ─────────────────────────────────────
+  // ── Challenge System ───────────────────────────────
 
-  socket.on('restartGame', () => {
-    const playerData = onlinePlayers.get(socket.id);
-    if (!playerData || !playerData.roomCode) return;
-    const room = rooms.get(playerData.roomCode);
-    if (!room) return;
+  function cleanupChallengesForPlayer(socketId) {
+    // If this player is the target of a challenge, expire it
+    if (challenges.has(socketId)) {
+      const ch = challenges.get(socketId);
+      clearTimeout(ch.timer);
+      io.to(ch.challengerId).emit('challengeDeclined', {
+        targetName: onlinePlayers.get(socketId)?.name || 'Player'
+      });
+      challenges.delete(socketId);
+    }
 
-    if (socket.id !== room.host) {
-      socket.emit('error', { message: 'Only the host can restart' });
+    // If this player is the challenger, cancel their pending challenges
+    for (const [targetId, ch] of challenges) {
+      if (ch.challengerId === socketId) {
+        clearTimeout(ch.timer);
+        io.to(targetId).emit('challengeCancelled', {
+          challengerName: onlinePlayers.get(socketId)?.name || 'Player'
+        });
+        challenges.delete(targetId);
+      }
+    }
+  }
+
+  socket.on('challengePlayer', (data) => {
+    const { targetId, categories: challengeCategories } = (data && typeof data === 'object') ? data : { targetId: data };
+
+    const challenger = onlinePlayers.get(socket.id);
+    if (!challenger) {
+      socket.emit('error', { message: 'Set your name first' });
+      return;
+    }
+    if (challenger.roomCode) {
+      socket.emit('error', { message: 'You are already in a game' });
       return;
     }
 
-    room.players.forEach(p => {
-      p.score = 0;
-      p.ready = false;
-      p.submission = null;
-    });
-    room.currentRound = 0;
-    room.currentPair = null;
-    room.state = 'lobby';
-    clearRoomTimer(playerData.roomCode);
-    clearPauseTimer(playerData.roomCode);
+    const target = onlinePlayers.get(targetId);
+    if (!target) {
+      socket.emit('error', { message: 'Player not found' });
+      return;
+    }
+    if (target.roomCode) {
+      socket.emit('error', { message: 'Player is already in a game' });
+      return;
+    }
+    if (targetId === socket.id) {
+      socket.emit('error', { message: 'Cannot challenge yourself' });
+      return;
+    }
 
-    broadcastToRoom(playerData.roomCode, 'gameReset', {
-      players: room.players,
-      hostId: room.host,
-      categories: room.categories
+    // Check if target already has a pending challenge
+    if (challenges.has(targetId)) {
+      socket.emit('error', { message: 'Player already has a pending challenge' });
+      return;
+    }
+
+    // Check if challenger already has a pending outgoing challenge
+    for (const [tId, ch] of challenges) {
+      if (ch.challengerId === socket.id) {
+        socket.emit('error', { message: 'You already have a pending challenge' });
+        return;
+      }
+    }
+
+    // Validate and default categories
+    const ALLOWED_CATS = ['noun_adj_verb', 'countries', 'us_states', 'us_cities'];
+    const categories = {};
+    if (challengeCategories && typeof challengeCategories === 'object') {
+      for (const cat of ALLOWED_CATS) {
+        categories[cat] = challengeCategories[cat] !== false; // default true
+      }
+    } else {
+      for (const cat of ALLOWED_CATS) {
+        categories[cat] = true;
+      }
+    }
+
+    // Create challenge with timeout
+    const timer = setTimeout(() => {
+      challenges.delete(targetId);
+      io.to(socket.id).emit('challengeExpired', { targetId, targetName: target.name });
+      io.to(targetId).emit('challengeExpired', {});
+    }, CHALLENGE_TIMEOUT);
+
+    challenges.set(targetId, {
+      challengerId: socket.id,
+      challengerName: challenger.name,
+      targetName: target.name,
+      categories,
+      timer
     });
+
+    io.to(targetId).emit('challengeReceived', {
+      challengerId: socket.id,
+      challengerName: challenger.name,
+      categories
+    });
+
+    socket.emit('challengeSent', {
+      targetId,
+      targetName: target.name,
+      categories
+    });
+  });
+
+  socket.on('acceptChallenge', (challengerId) => {
+    const target = onlinePlayers.get(socket.id);
+    if (!target) return;
+
+    const challenge = challenges.get(socket.id);
+    if (!challenge || challenge.challengerId !== challengerId) {
+      socket.emit('error', { message: 'No pending challenge from this player' });
+      return;
+    }
+
+    const challenger = onlinePlayers.get(challengerId);
+    if (!challenger || challenger.roomCode) {
+      clearTimeout(challenge.timer);
+      challenges.delete(socket.id);
+      socket.emit('error', { message: 'Challenger is no longer available' });
+      return;
+    }
+
+    // Clear timeout
+    clearTimeout(challenge.timer);
+    challenges.delete(socket.id);
+
+    // Create room
+    const roomCode = generateRoomCode();
+    const room = {
+      code: roomCode,
+      host: challengerId,
+      players: [
+        { id: challengerId, name: challenger.name, score: 0, ready: false, submission: null },
+        { id: socket.id, name: target.name, score: 0, ready: false, submission: null }
+      ],
+      state: 'lobby',
+      currentRound: 0,
+      currentPair: null,
+      roundStartTime: 0,
+      maxPlayers: 2,
+      categories: challenge.categories || { noun_adj_verb: true, countries: true, us_states: true, us_cities: true },
+      categoryPairs: null
+    };
+
+    rooms.set(roomCode, room);
+
+    // Update both players
+    challenger.status = 'in_room';
+    challenger.roomCode = roomCode;
+    target.status = 'in_room';
+    target.roomCode = roomCode;
+
+    // Get sockets and join room
+    const challengerSocket = io.sockets.sockets.get(challengerId);
+    const targetSocket = io.sockets.sockets.get(socket.id);
+
+    if (challengerSocket) {
+      challengerSocket.join(roomCode);
+      challengerSocket.data.status = 'in_room';
+      challengerSocket.data.roomCode = roomCode;
+    }
+    if (targetSocket) {
+      targetSocket.join(roomCode);
+      targetSocket.data.status = 'in_room';
+      targetSocket.data.roomCode = roomCode;
+    }
+
+    // Notify both about the room
+    broadcastToRoom(roomCode, 'challengeAccepted', {
+      roomCode,
+      players: room.players,
+      hostId: room.host
+    });
+
+    broadcastOnlinePlayers();
+
+    // Start game immediately
+    forceStartGame(roomCode);
+    console.log(`Challenge game started: ${challenger.name} vs ${target.name} in room ${roomCode}`);
+  });
+
+  socket.on('declineChallenge', (challengerId) => {
+    const challenge = challenges.get(socket.id);
+    if (!challenge || challenge.challengerId !== challengerId) return;
+
+    clearTimeout(challenge.timer);
+    challenges.delete(socket.id);
+
+    io.to(challengerId).emit('challengeDeclined', {
+      targetName: onlinePlayers.get(socket.id)?.name || 'Player'
+    });
+  });
+
+  socket.on('cancelChallenge', (targetId) => {
+    const challenge = challenges.get(targetId);
+    if (!challenge || challenge.challengerId !== socket.id) return;
+
+    clearTimeout(challenge.timer);
+    challenges.delete(targetId);
+
+    io.to(targetId).emit('challengeCancelled', {
+      challengerName: onlinePlayers.get(socket.id)?.name || 'Player'
+    });
+
+    socket.emit('challengeCancelled', { targetId });
+  });
+
+  // ── Post-Game ─────────────────────────────────────
+
+  socket.on('requestPlayAgain', () => {
+    const playerData = onlinePlayers.get(socket.id);
+    if (!playerData || !playerData.roomCode) return;
+    const room = rooms.get(playerData.roomCode);
+    if (!room || room.state !== 'finished') return;
+
+    if (!room.playAgainVotes) {
+      room.playAgainVotes = new Set();
+    }
+
+    room.playAgainVotes.add(socket.id);
+    const voteCount = room.playAgainVotes.size;
+    const playerCount = room.players.length;
+
+    // Notify room of current vote status
+    broadcastToRoom(playerData.roomCode, 'playAgainVote', {
+      voteCount,
+      playerCount,
+      votedId: socket.id
+    });
+
+    // When everyone agrees, restart the game
+    if (voteCount >= playerCount) {
+      room.playAgainVotes.clear();
+      room.players.forEach(p => {
+        p.score = 0;
+        p.ready = false;
+        p.submission = null;
+      });
+      room.currentRound = 0;
+      room.currentPair = null;
+      room.state = 'lobby';
+      clearRoomTimer(playerData.roomCode);
+      clearPauseTimer(playerData.roomCode);
+
+      broadcastToRoom(playerData.roomCode, 'gameReset', {
+        players: room.players,
+        hostId: room.host,
+        categories: room.categories
+      });
+    }
   });
 
   socket.on('returnToLobby', handlePlayerLeaveRoom);
@@ -804,6 +1095,9 @@ io.on('connection', (socket) => {
   socket.on('disconnect', (reason) => {
     console.log('Player disconnected:', socket.id, reason);
     const player = onlinePlayers.get(socket.id);
+
+    // Clean up any pending challenges
+    cleanupChallengesForPlayer(socket.id);
 
     if (player) {
       // Mark as disconnected but DON'T remove from room or onlinePlayers immediately

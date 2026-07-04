@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 // ── Configuration ────────────────────────────────────
 const PRIMARY_FILE = './words_scowl70.txt';
 const SLURS_FILE = './slurs_blacklist.txt';
-const DEMONYMS_FILE = './demonyms.txt';
+const COUNTRIES_FILE = './countries.txt';
 const STATES_FILE = './us_states.txt';
 const CITIES_FILE = './us_cities.txt';
 const OUTPUT_FILE = './word_lookup.json';
@@ -46,19 +46,19 @@ function loadSlursBlacklist() {
   return new Set(slurs);
 }
 
-function loadDemonyms() {
-  if (!fs.existsSync(DEMONYMS_FILE)) {
-    console.log(`  No demonyms file found at ${DEMONYMS_FILE}, skipping demonyms`);
+function loadCountries() {
+  if (!fs.existsSync(COUNTRIES_FILE)) {
+    console.log(`  No countries file found at ${COUNTRIES_FILE}, skipping countries`);
     return [];
   }
-  const content = fs.readFileSync(DEMONYMS_FILE, 'utf8');
-  const demonyms = content.split('\n')
+  const content = fs.readFileSync(COUNTRIES_FILE, 'utf8');
+  const countries = content.split('\n')
     .map(l => l.trim().toLowerCase())
     .filter(l => l.length > 0 && !l.startsWith('#'))
     .filter(w => /^[a-z]+$/.test(w))
     .filter(w => w.length >= MIN_LEN && w.length <= MAX_LEN);
-  console.log(`  Loaded ${demonyms.length} demonyms from ${DEMONYMS_FILE}`);
-  return demonyms;
+  console.log(`  Loaded ${countries.length} countries from ${COUNTRIES_FILE}`);
+  return countries;
 }
 
 function loadUSStates() {
@@ -168,8 +168,8 @@ function loadPOSTags() {
   return posMap;
 }
 
-function computeCategories(lookup, posMap, demonyms, states, cities) {
-  const demonymSet = new Set(demonyms);
+function computeCategories(lookup, posMap, countries, states, cities) {
+  const countrySet = new Set(countries);
   const stateSet = new Set(states);
   const citySet = new Set(cities);
   const wordCategories = {};
@@ -183,22 +183,20 @@ function computeCategories(lookup, posMap, demonyms, states, cities) {
       const tags = posMap.get(word);
 
       if (tags) {
-        // noun: N, h, p
-        if (tags.has('N') || tags.has('h') || tags.has('p')) cats.add('noun');
-        // verb: V, t, or i present
-        if (tags.has('V') || tags.has('t') || tags.has('i')) cats.add('verb');
-        // adjective: A
-        if (tags.has('A')) cats.add('adjective');
-        // adverb: v when NOT part of V/t/i compound
-        if (tags.has('v') && !tags.has('V') && !tags.has('t') && !tags.has('i')) {
-          cats.add('adverb');
+        // Combined POS: noun (N/h/p), verb (V/t/i), adjective (A), adverb (v standalone)
+        // All mapped to a single noun_adj_verb category.
+        if (tags.has('N') || tags.has('h') || tags.has('p') ||
+            tags.has('V') || tags.has('t') || tags.has('i') ||
+            tags.has('A') ||
+            (tags.has('v') && !tags.has('V') && !tags.has('t') && !tags.has('i'))) {
+          cats.add('noun_adj_verb');
         }
         // preposition: P (treated uniformly, simplifying Moby Plural vs WordNet Preposition)
         if (tags.has('P')) cats.add('preposition');
       }
 
-      // countries: word appears in demonyms list (additive to POS tags)
-      if (demonymSet.has(word)) cats.add('countries');
+      // countries: word appears in countries list (additive to POS tags)
+      if (countrySet.has(word)) cats.add('countries');
       // us_states: word appears in US states list (additive)
       if (stateSet.has(word)) cats.add('us_states');
       // us_cities: word appears in US cities list (additive)
@@ -296,34 +294,34 @@ for (const line of primaryLines) {
 console.log(`  Skipped: ${primarySkipped}, Added: ${primaryAdded}, Slurs filtered: ${slursFiltered}`);
 report(lookup, 'After SCOWL 70 (+ blacklist)');
 
-// ── Phase 3: Demonyms ────────────────────────────────
+// ── Phase 3: Countries ────────────────────────────────
 
-console.log('\n═══ Phase 3: Curated Demonyms ═══');
-const demonyms = loadDemonyms();
+console.log('\n═══ Phase 3: Curated Countries ═══');
+const countries = loadCountries();
 
-let demonymsAdded = 0;
-let demonymsSkipped = 0;
+let countriesAdded = 0;
+let countriesSkipped = 0;
 
-for (const word of demonyms) {
+for (const word of countries) {
   if (!isValidPrimary(word, slursBlacklist)) {
-    demonymsSkipped++;
+    countriesSkipped++;
     continue;
   }
   if (addToLookup(lookup, word)) {
-    demonymsAdded++;
+    countriesAdded++;
   } else {
-    demonymsSkipped++;
+    countriesSkipped++;
   }
 }
 
-console.log(`  Added: ${demonymsAdded}, Already present/skipped: ${demonymsSkipped}`);
+console.log(`  Added: ${countriesAdded}, Already present/skipped: ${countriesSkipped}`);
 
-// Show which demonyms are new
-if (demonymsAdded > 0) {
-  console.log(`  ${demonymsAdded} new demonyms added to dictionary`);
+// Show which countries are new
+if (countriesAdded > 0) {
+  console.log(`  ${countriesAdded} new countries added to dictionary`);
 }
 
-report(lookup, 'Final (SCOWL 70 + demonyms)');
+report(lookup, 'Final (SCOWL 70 + countries)');
 
 // ── Phase 4: US States ───────────────────────────────
 
@@ -390,7 +388,7 @@ const posMap = loadPOSTags();
 
 console.log('\nComputing word categories...');
 const { wordCategories, tagged, untagged, categoryCounts } =
-  computeCategories(lookup, posMap, demonyms, states, cities);
+  computeCategories(lookup, posMap, countries, states, cities);
 
 // Validate: every word in lookup must have an entry in wordCategories
 let allLookupWords = new Set();
@@ -434,7 +432,7 @@ console.log(`  total: ${(tagged + untagged).toLocaleString()}`);
 
 // Sample category lookups
 console.log('\nSample category entries:');
-const samples = ['about', 'book', 'run', 'good', 'fast', 'small', 'american', 'french', 'canadian', 'abaya',
+const samples = ['about', 'book', 'run', 'good', 'fast', 'small', 'france', 'japan', 'canada', 'abaya',
   'texas', 'california', 'ohio', 'hawaii', 'chicago', 'phoenix', 'seattle', 'denver', 'miami'];
 for (const w of samples) {
   if (w in sortedCategories) {
@@ -497,12 +495,12 @@ for (const k of sampleKeys) {
   console.log(`  ${k}: ${display} (${words.length} words)`);
 }
 
-// ── Demonym Validation ────────────────────────────────
+// ── Country Validation ────────────────────────────────
 
-console.log('\nDemonym presence check:');
-const checkWords = ['american', 'arab', 'french', 'indian', 'texan', 'canadian', 
-  'mexican', 'scottish', 'japanese', 'chinese', 'korean', 'russian', 'british',
-  'swedish', 'spanish', 'italian', 'german', 'dutch', 'irish', 'jewish'];
+console.log('\nCountry presence check:');
+const checkWords = ['france', 'japan', 'canada', 'brazil', 'germany', 'mexico',
+  'india', 'china', 'italy', 'spain', 'russia', 'egypt',
+  'kenya', 'australia', 'norway', 'vietnam', 'chile', 'iran']; 
 const lookupSet = new Set();
 for (const [k, words] of Object.entries(lookup)) for (const w of words) lookupSet.add(w);
 for (const w of checkWords) {
@@ -534,6 +532,6 @@ console.log(`  Total words: ${finalTotal.toLocaleString()}`);
 console.log(`  Active buckets: ${finalKeys.length}/676`);
 console.log(`  Empty buckets: ${finalEmpty.length}`);
 console.log(`  Slurs filtered: ${slursFiltered}`);
-console.log(`  Demonyms added: ${demonymsAdded}`);
+  console.log(`  Countries added: ${countriesAdded}`);
 console.log(`  US states added: ${statesAdded}`);
 console.log(`  US cities added: ${citiesAdded}`);

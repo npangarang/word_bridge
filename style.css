@@ -3129,13 +3129,10 @@ body.timer-critical::before {
   width: 100%;
 }
 
-/* Fifth toggle (Countries) spans both columns and centers itself.
-   Looks like a deliberate "footer" item rather than a lonely cell. */
-.category-toggles-row > :nth-child(5) {
+/* First toggle (noun / adj / verb) spans full row — long horizontal button */
+.category-toggles-row > :nth-child(1) {
   grid-column: 1 / -1;
-  justify-self: center;
-  width: 50%;
-  min-width: 0;
+  width: 100%;
 }
 
 /* ── Individual toggle button ──────────────────────── */
@@ -3354,6 +3351,185 @@ body.timer-critical::before {
   box-shadow: none;
 }
 
+/* ── Challenge System ────────────────────────────────── */
+
+.challenge-btn {
+  background: none;
+  border: 1px solid var(--neon-cyan);
+  color: var(--neon-cyan);
+  font-size: 14px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  line-height: 1;
+  margin-left: auto;
+}
+
+.challenge-btn:hover {
+  background: var(--neon-cyan);
+  color: var(--bg-dark);
+  box-shadow: 0 0 10px var(--neon-cyan);
+}
+
+.challenge-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Challenge modal */
+.challenge-modal-content {
+  max-width: 360px;
+  text-align: center;
+  padding: 28px 24px 20px;
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+.challenge-title {
+  color: var(--neon-yellow);
+  letter-spacing: 3px;
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+
+#challengeModalMsg {
+  font-size: 14px;
+  color: var(--text-light);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.challenge-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.challenge-buttons .arcade-btn {
+  flex: 1;
+  max-width: 140px;
+}
+
+.challenge-timer-bar {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.challenge-timer-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--neon-magenta);
+  border-radius: 2px;
+  animation: challengeTimerShrink 15s linear forwards;
+  transform-origin: left;
+}
+
+@keyframes challengeTimerShrink {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+/* Challenge category area */
+.challenge-modal-cats {
+  margin-bottom: 16px;
+}
+
+.challenge-cats-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 7px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+}
+
+.challenge-cats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: auto;
+  gap: 6px;
+}
+
+.challenge-cats-grid > :nth-child(1) {
+  grid-column: 1 / -1;
+}
+
+/* Compact category toggle for challenge modal */
+.category-toggle-sm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--text-dim);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+}
+
+.category-toggle-sm .cat-label-sm {
+  color: var(--text-dim);
+  transition: color 0.15s;
+}
+
+.category-toggle-sm:hover {
+  border-color: var(--neon-cyan);
+}
+
+.category-toggle-sm.active {
+  border-color: var(--neon-cyan);
+  background: rgba(0, 212, 255, 0.08);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.2);
+}
+
+.category-toggle-sm.active .cat-label-sm {
+  color: var(--neon-cyan);
+}
+
+.category-toggle-sm.inactive {
+  border-color: rgba(255,255,255,0.08);
+}
+
+.category-toggle-sm.inactive .cat-label-sm {
+  color: rgba(255,255,255,0.2);
+}
+
+/* Challenge receive — category tags */
+.challenge-cat-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  margin: 2px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: 'Courier New', monospace;
+}
+
+.challenge-cat-tag.active {
+  background: rgba(0, 212, 255, 0.12);
+  color: var(--neon-cyan);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+}
+
+.challenge-cat-tag.inactive {
+  background: rgba(255,255,255,0.03);
+  color: rgba(255,255,255,0.25);
+  border: 1px solid rgba(255,255,255,0.08);
+  text-decoration: line-through;
+}
+
+.challenge-cats-all {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 /* ── Mobile layout ─────────────────────────────────── */
 
 @media (max-width: 380px) {
@@ -3361,7 +3537,7 @@ body.timer-critical::before {
     grid-template-columns: 1fr;
   }
 
-  .category-toggles-row > :nth-child(5) {
+  .category-toggles-row > :nth-child(1) {
     width: 100%;
   }
 
