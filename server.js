@@ -3,8 +3,10 @@ const http = require('http');
 const { Server } = require('socket.io');
 const fs = require('fs');
 const path = require('path');
+const compression = require('compression');
 
 const app = express();
+app.use(compression());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
@@ -16,7 +18,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const ROUND_TIME = 10;
-const PAUSE_TIME = 3;
+const PAUSE_TIME = 5;
 const TOTAL_ROUNDS = 10;
 const MAX_PLAYERS = 8;
 
@@ -25,6 +27,8 @@ const wordLookup = {};
 for (const key of Object.keys(wordLookupRaw)) {
   wordLookup[key] = new Set(wordLookupRaw[key]);
 }
+
+const wordCategories = JSON.parse(fs.readFileSync('./word_categories.json', 'utf8'));
 
 const validCombinations = new Set();
 for (const key of Object.keys(wordLookup)) {
@@ -62,12 +66,12 @@ function generateRoomCode() {
   return code;
 }
 
-function getRandomPair() {
-  const keys = Array.from(validCombinations);
+function getRandomPair(pairs) {
+  const keys = Array.from(pairs || validCombinations);
   return keys[Math.floor(Math.random() * keys.length)];
 }
 
-function validateWord(word, startLetter, endLetter) {
+function validateWord(word, startLetter, endLetter, room) {
   const w = word.toLowerCase();
   const s = startLetter.toLowerCase();
   const e = endLetter.toLowerCase();
@@ -78,7 +82,20 @@ function validateWord(word, startLetter, endLetter) {
 
   const key = s + e;
   const words = wordLookup[key];
-  return words ? words.has(w) : false;
+  if (!words || !words.has(w)) return false;
+
+  // Category check (only when at least one category is disabled)
+  if (room && room.categories && Object.keys(room.categories).some(k => room.categories[k] === false)) {
+    const wordCats = wordCategories[w];
+    // Only filter if word has explicit categories (empty array = untagged = always valid)
+    if (wordCats && wordCats.length > 0) {
+      if (!wordCats.some(cat => room.categories[cat])) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 function getOnlinePlayersList() {
@@ -225,11 +242,22 @@ function endRound(roomCode) {
     };
   });
 
-  // Examples if nobody got a valid word
+  // Examples if nobody got a valid word — must respect category filter
   let examples = null;
   if (validSubmissions.length === 0 && room.currentPair) {
     const pairWords = wordLookup[room.currentPair];
-    examples = pairWords ? [...pairWords].slice(0, 5) : null;
+    if (pairWords) {
+      const hasActiveFilter = room.categories && Object.keys(room.categories).some(k => room.categories[k] === false);
+      if (hasActiveFilter) {
+        // Only show words explicitly matching an active category — skip untagged
+        examples = [...pairWords].filter(w => {
+          const wordCats = wordCategories[w];
+          return wordCats && wordCats.length > 0 && wordCats.some(cat => room.categories[cat]);
+        }).slice(0, 5);
+      } else {
+        examples = [...pairWords].slice(0, 5);
+      }
+    }
   }
 
   broadcastToRoom(roomCode, 'roundEnd', {
@@ -244,9 +272,14 @@ function endRound(roomCode) {
   room.players.forEach(p => { p.submission = null; });
   room.state = 'paused';
 
-  // After final round → end game
+  // After final round → end game after pause (same as between rounds)
   if (room.currentRound >= TOTAL_ROUNDS) {
-    endGame(roomCode);
+    clearPauseTimer(roomCode);
+    const pauseTimer = setTimeout(() => {
+      pauseTimers.delete(roomCode);
+      endGame(roomCode);
+    }, PAUSE_TIME * 1000);
+    pauseTimers.set(roomCode, pauseTimer);
     return;
   }
 
@@ -264,7 +297,7 @@ function startNextRound(roomCode) {
   if (!room) return;
 
   room.currentRound++;
-  room.currentPair = getRandomPair();
+  room.currentPair = getRandomPair(room.categoryPairs);
   room.roundStartTime = Date.now();
   room.state = 'playing';
 
@@ -370,7 +403,9 @@ io.on('connection', (socket) => {
       currentRound: 0,
       currentPair: null,
       roundStartTime: 0,
-      maxPlayers: MAX_PLAYERS
+      maxPlayers: MAX_PLAYERS,
+      categories: { noun: true, verb: true, adjective: true, adverb: true, countries: true, us_states: true, us_cities: true },
+      categoryPairs: null
     };
 
     rooms.set(roomCode, room);
@@ -382,7 +417,8 @@ io.on('connection', (socket) => {
       code: roomCode,
       players: room.players,
       hostId: room.host,
-      maxPlayers: room.maxPlayers
+      maxPlayers: room.maxPlayers,
+      categories: room.categories
     });
 
     broadcastOnlinePlayers();
@@ -442,7 +478,8 @@ io.on('connection', (socket) => {
       code: roomCode,
       players: room.players,
       hostId: room.host,
-      maxPlayers: room.maxPlayers
+      maxPlayers: room.maxPlayers,
+      categories: room.categories
     });
 
     // Notify others
@@ -471,6 +508,32 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('updateCategories', (categories) => {
+    const player = onlinePlayers.get(socket.id);
+    if (!player || !player.roomCode) return;
+    const room = rooms.get(player.roomCode);
+    if (!room || room.state !== 'lobby') return;
+    if (socket.id !== room.host) {
+      socket.emit('error', { message: 'Only the host can change categories' });
+      return;
+    }
+
+    // Validate shape: must be object with all expected boolean keys
+    const ALLOWED_CATEGORIES = ['noun', 'verb', 'adjective', 'adverb', 'countries', 'us_states', 'us_cities'];
+    const isValid = categories
+      && typeof categories === 'object'
+      && ALLOWED_CATEGORIES.every(k => typeof categories[k] === 'boolean');
+    if (!isValid) {
+      socket.emit('error', { message: 'Invalid categories' });
+      return;
+    }
+    room.categories = { ...categories };
+
+    broadcastToRoom(player.roomCode, 'categoriesUpdated', {
+      categories: room.categories
+    });
+  });
+
   socket.on('startGame', () => {
     const player = onlinePlayers.get(socket.id);
     if (!player || !player.roomCode) return;
@@ -494,6 +557,34 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // Compute category-filtered valid pairs
+    const categoryPairs = new Set();
+    const hasActiveFilter = Object.keys(room.categories).some(k => room.categories[k] === false);
+
+    if (hasActiveFilter) {
+      for (const key of validCombinations) {
+        const words = wordLookup[key];
+        for (const word of words) {
+          const wordCats = wordCategories[word];
+          // Only include pair if at least one word matches an active category.
+          // Untagged words alone do NOT qualify a pair (they still pass submission validation).
+          if (wordCats && wordCats.length > 0 && wordCats.some(cat => room.categories[cat])) {
+            categoryPairs.add(key);
+            break;
+          }
+        }
+      }
+
+      if (categoryPairs.size === 0) {
+        socket.emit('error', { message: 'No words match the selected categories. Enable more categories.' });
+        return;
+      }
+
+      room.categoryPairs = categoryPairs;
+    } else {
+      room.categoryPairs = null;
+    }
+
     // Reset for new game
     room.players.forEach(p => {
       p.score = 0;
@@ -501,7 +592,7 @@ io.on('connection', (socket) => {
       p.submission = null;
     });
     room.currentRound = 1;
-    room.currentPair = getRandomPair();
+    room.currentPair = getRandomPair(room.categoryPairs);
     room.roundStartTime = Date.now();
     room.state = 'playing';
 
@@ -545,7 +636,7 @@ io.on('connection', (socket) => {
     const roomPlayer = getPlayer(room, socket.id);
     if (!roomPlayer || roomPlayer.submission) return; // already submitted
 
-    const isValid = validateWord(word, room.currentPair[0], room.currentPair[1]);
+    const isValid = validateWord(word, room.currentPair[0], room.currentPair[1], room);
     const submissionTime = Date.now();
     const timeTaken = (submissionTime - room.roundStartTime) / 1000;
 
@@ -560,6 +651,12 @@ io.on('connection', (socket) => {
       playerId: socket.id,
       playerName: roomPlayer.name
     });
+
+    // Auto-end round if all players have submitted
+    const allSubmitted = room.players.every(p => p.submission !== null);
+    if (allSubmitted) {
+      endRound(player.roomCode);
+    }
   });
 
   socket.on('sendReaction', (emoji) => {
@@ -601,7 +698,8 @@ io.on('connection', (socket) => {
 
     broadcastToRoom(playerData.roomCode, 'gameReset', {
       players: room.players,
-      hostId: room.host
+      hostId: room.host,
+      categories: room.categories
     });
   });
 
@@ -631,6 +729,10 @@ app.use('/sounds', express.static(path.join(__dirname, 'sounds')));
 
 app.get('/word_lookup.json', (req, res) => {
   res.sendFile(path.join(__dirname, 'word_lookup.json'));
+});
+
+app.get('/word_categories.json', (req, res) => {
+  res.sendFile(path.join(__dirname, 'word_categories.json'));
 });
 
 server.listen(PORT, '0.0.0.0', () => {

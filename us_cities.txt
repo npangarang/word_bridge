@@ -1,0 +1,44 @@
+# One-word major US cities for WordBridge dictionary.
+# Criteria: top ~50 US cities by population, single-word names only.
+# Multi-word cities excluded: New York, Los Angeles, San Antonio,
+#   San Diego, San Jose, Fort Worth, San Francisco, El Paso,
+#   Las Vegas, Kansas City, Long Beach, Virginia Beach,
+#   Colorado Springs, New Orleans, Oklahoma City, Salt Lake City
+# Format: lowercase, one per line. Lines starting with # are comments.
+albuquerque
+anaheim
+atlanta
+austin
+baltimore
+boston
+charlotte
+chicago
+cincinnati
+cleveland
+columbus
+dallas
+denver
+detroit
+fresno
+honolulu
+houston
+indianapolis
+jacksonville
+memphis
+miami
+milwaukee
+minneapolis
+nashville
+oakland
+omaha
+orlando
+philadelphia
+phoenix
+pittsburgh
+portland
+raleigh
+sacramento
+seattle
+tampa
+tucson
+tulsa

@@ -68,6 +68,15 @@
         </div>
       </div>
       <div id="roomPlayersList" class="players-list"></div>
+      <div id="categoryToggles" class="category-toggles">
+        <div class="category-toggles-header">
+          <span class="category-toggles-title">WORD CATEGORIES</span>
+          <span class="category-toggles-subtitle" id="categoryTogglesSubtitle"></span>
+        </div>
+        <div class="category-toggles-row" id="categoryTogglesRow">
+          <!-- toggles rendered by JS -->
+        </div>
+      </div>
       <p id="roomReadyStatus" class="waiting-text">0/0 ready</p>
       <div class="room-lobby-btns">
         <button id="readyUpLobbyBtn" class="arcade-btn arcade-btn-primary">READY UP</button>
@@ -177,8 +186,8 @@
         <p class="tutorial-step-text">Type a real word that begins with A and ends with T.</p>
         <p class="tutorial-step-note">Uses a standard English dictionary. Common country &amp; culture words (american, french, arab) are accepted. Offensive terms, personal names, and places are not.</p>
         <div class="tutorial-typewriter" aria-hidden="true">
-          <span class="type-letter type-end" style="--i:0">A</span>
-          <span class="type-letter" style="--i:1">B</span>
+           <span class="type-letter type-start" style="--i:0">A</span>
+           <span class="type-letter" style="--i:1">B</span>
           <span class="type-letter" style="--i:2">O</span>
           <span class="type-letter" style="--i:3">U</span>
           <span class="type-letter type-end" style="--i:4">T</span>
@@ -203,10 +212,10 @@
         <div class="tutorial-step-label">4 <span class="tutorial-sep">·</span> RACE THE CLOCK</div>
         <p class="tutorial-step-text">10 rounds · 10 seconds each · highest total wins.</p>
         <div class="tutorial-countdown" aria-hidden="true">
-          <span class="countdown-num" style="--i:3">3</span>
-          <span class="countdown-num" style="--i:2">2</span>
-          <span class="countdown-num" style="--i:1">1</span>
-          <span class="countdown-num countdown-go" style="--i:0">GO</span>
+           <span class="countdown-num" style="--i:0">3</span>
+           <span class="countdown-num" style="--i:1">2</span>
+           <span class="countdown-num" style="--i:2">1</span>
+           <span class="countdown-num countdown-go" style="--i:3">GO</span>
         </div>
       </div>
 

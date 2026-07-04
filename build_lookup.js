@@ -1,10 +1,19 @@
 const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const { execSync } = require('child_process');
 
 // ── Configuration ────────────────────────────────────
 const PRIMARY_FILE = './words_scowl70.txt';
 const SLURS_FILE = './slurs_blacklist.txt';
 const DEMONYMS_FILE = './demonyms.txt';
+const STATES_FILE = './us_states.txt';
+const CITIES_FILE = './us_cities.txt';
 const OUTPUT_FILE = './word_lookup.json';
+
+const POS_FILE = './part-of-speech.txt';
+const POS_URL = 'https://raw.githubusercontent.com/en-wl/wordlist/master/pos/part-of-speech.txt';
+const CATEGORIES_FILE = './word_categories.json';
 
 const MIN_LEN = 3;
 const MAX_LEN = 12;
@@ -50,6 +59,166 @@ function loadDemonyms() {
     .filter(w => w.length >= MIN_LEN && w.length <= MAX_LEN);
   console.log(`  Loaded ${demonyms.length} demonyms from ${DEMONYMS_FILE}`);
   return demonyms;
+}
+
+function loadUSStates() {
+  if (!fs.existsSync(STATES_FILE)) {
+    console.log(`  No states file found at ${STATES_FILE}, skipping US states`);
+    return [];
+  }
+  const content = fs.readFileSync(STATES_FILE, 'utf8');
+  const states = content.split('\n')
+    .map(l => l.trim().toLowerCase())
+    .filter(l => l.length > 0 && !l.startsWith('#'))
+    .filter(w => /^[a-z]+$/.test(w))
+    .filter(w => w.length >= MIN_LEN && w.length <= MAX_LEN);
+  console.log(`  Loaded ${states.length} US states from ${STATES_FILE}`);
+  return states;
+}
+
+function loadUSCities() {
+  if (!fs.existsSync(CITIES_FILE)) {
+    console.log(`  No cities file found at ${CITIES_FILE}, skipping US cities`);
+    return [];
+  }
+  const content = fs.readFileSync(CITIES_FILE, 'utf8');
+  const cities = content.split('\n')
+    .map(l => l.trim().toLowerCase())
+    .filter(l => l.length > 0 && !l.startsWith('#'))
+    .filter(w => /^[a-z]+$/.test(w))
+    .filter(w => w.length >= MIN_LEN && w.length <= MAX_LEN);
+  console.log(`  Loaded ${cities.length} US cities from ${CITIES_FILE}`);
+  return cities;
+}
+
+function downloadPOSFile() {
+  if (fs.existsSync(POS_FILE)) {
+    const stat = fs.statSync(POS_FILE);
+    console.log(`  Using cached ${POS_FILE} (${(stat.size / 1024 / 1024).toFixed(2)} MB)`);
+    return;
+  }
+  console.log(`  Downloading POS file from ${POS_URL}...`);
+  try {
+    execSync(`curl -fsSL -o "${POS_FILE}" "${POS_URL}"`, { stdio: 'inherit' });
+  } catch (err) {
+    // Fallback to Node's https module if curl fails
+    console.log('  curl failed, falling back to https module...');
+    const file = fs.createWriteStream(POS_FILE);
+    https.get(POS_URL, (response) => {
+      if (response.statusCode !== 200) {
+        throw new Error(`Failed to download: HTTP ${response.statusCode}`);
+      }
+      response.pipe(file);
+      file.on('finish', () => file.close());
+    }).on('error', (err) => {
+      fs.unlink(POS_FILE, () => {});
+      throw err;
+    });
+    // Wait for the download to complete (simple sync wrapper)
+    const startTime = Date.now();
+    while (!file.closed && Date.now() - startTime < 60000) {
+      require('child_process').execSync('sleep 0.1');
+    }
+  }
+  console.log(`  Saved to ${POS_FILE}`);
+}
+
+function loadPOSTags() {
+  const content = fs.readFileSync(POS_FILE, 'utf8');
+  const lines = content.split('\n');
+  const posMap = new Map();
+  let parsed = 0;
+  let skippedNonAlpha = 0;
+  let skippedLength = 0;
+
+  for (const line of lines) {
+    const tabIdx = line.indexOf('\t');
+    if (tabIdx < 0) continue;
+
+    const word = line.substring(0, tabIdx).toLowerCase();
+    const tags = line.substring(tabIdx + 1);
+
+    if (!/^[a-z]+$/.test(word)) {
+      skippedNonAlpha++;
+      continue;
+    }
+    if (word.length < MIN_LEN || word.length > MAX_LEN) {
+      skippedLength++;
+      continue;
+    }
+
+    // Strip '|' separators (WordNet source markers); keep tag letters
+    const tagSet = new Set();
+    for (const c of tags) {
+      if (c === '|') continue;
+      tagSet.add(c);
+    }
+
+    const existing = posMap.get(word);
+    if (existing) {
+      for (const c of tagSet) existing.add(c);
+    } else {
+      posMap.set(word, tagSet);
+    }
+    parsed++;
+  }
+
+  console.log(`  Parsed ${parsed.toLocaleString()} word entries (skipped ${skippedNonAlpha} non-alpha, ${skippedLength} length)`);
+  console.log(`  Unique words in POS map: ${posMap.size.toLocaleString()}`);
+  return posMap;
+}
+
+function computeCategories(lookup, posMap, demonyms, states, cities) {
+  const demonymSet = new Set(demonyms);
+  const stateSet = new Set(states);
+  const citySet = new Set(cities);
+  const wordCategories = {};
+  const categoryCounts = {};
+  let tagged = 0;
+  let untagged = 0;
+
+  for (const words of Object.values(lookup)) {
+    for (const word of words) {
+      const cats = new Set();
+      const tags = posMap.get(word);
+
+      if (tags) {
+        // noun: N, h, p
+        if (tags.has('N') || tags.has('h') || tags.has('p')) cats.add('noun');
+        // verb: V, t, or i present
+        if (tags.has('V') || tags.has('t') || tags.has('i')) cats.add('verb');
+        // adjective: A
+        if (tags.has('A')) cats.add('adjective');
+        // adverb: v when NOT part of V/t/i compound
+        if (tags.has('v') && !tags.has('V') && !tags.has('t') && !tags.has('i')) {
+          cats.add('adverb');
+        }
+        // preposition: P (treated uniformly, simplifying Moby Plural vs WordNet Preposition)
+        if (tags.has('P')) cats.add('preposition');
+      }
+
+      // countries: word appears in demonyms list (additive to POS tags)
+      if (demonymSet.has(word)) cats.add('countries');
+      // us_states: word appears in US states list (additive)
+      if (stateSet.has(word)) cats.add('us_states');
+      // us_cities: word appears in US cities list (additive)
+      if (citySet.has(word)) cats.add('us_cities');
+
+      const sortedCats = Array.from(cats).sort();
+      wordCategories[word] = sortedCats;
+
+      if (sortedCats.length === 0) {
+        untagged++;
+      } else {
+        tagged++;
+        for (const c of sortedCats) {
+          categoryCounts[c] = (categoryCounts[c] || 0) + 1;
+        }
+      }
+    }
+  }
+
+  return { wordCategories, tagged, untagged, categoryCounts };
 }
 
 function isValidPrimary(word, slursBlacklist) {
@@ -156,6 +325,123 @@ if (demonymsAdded > 0) {
 
 report(lookup, 'Final (SCOWL 70 + demonyms)');
 
+// ── Phase 4: US States ───────────────────────────────
+
+console.log('\n═══ Phase 4: Curated US States ═══');
+const states = loadUSStates();
+
+let statesAdded = 0;
+let statesSkipped = 0;
+
+for (const word of states) {
+  if (!isValidPrimary(word, slursBlacklist)) {
+    statesSkipped++;
+    continue;
+  }
+  if (addToLookup(lookup, word)) {
+    statesAdded++;
+  } else {
+    statesSkipped++;
+  }
+}
+
+console.log(`  Added: ${statesAdded}, Already present/skipped: ${statesSkipped}`);
+
+if (statesAdded > 0) {
+  console.log(`  ${statesAdded} new US states added to dictionary`);
+}
+
+report(lookup, 'After US States');
+
+// ── Phase 5: US Cities ───────────────────────────────
+
+console.log('\n═══ Phase 5: Curated US Cities ═══');
+const cities = loadUSCities();
+
+let citiesAdded = 0;
+let citiesSkipped = 0;
+
+for (const word of cities) {
+  if (!isValidPrimary(word, slursBlacklist)) {
+    citiesSkipped++;
+    continue;
+  }
+  if (addToLookup(lookup, word)) {
+    citiesAdded++;
+  } else {
+    citiesSkipped++;
+  }
+}
+
+console.log(`  Added: ${citiesAdded}, Already present/skipped: ${citiesSkipped}`);
+
+if (citiesAdded > 0) {
+  console.log(`  ${citiesAdded} new US cities added to dictionary`);
+}
+
+report(lookup, 'After US Cities');
+
+// ── Phase 6: POS Categories ──────────────────────────
+
+console.log('\n═══ Phase 6: POS Categories ═══');
+console.log('Downloading/loading POS data...');
+downloadPOSFile();
+const posMap = loadPOSTags();
+
+console.log('\nComputing word categories...');
+const { wordCategories, tagged, untagged, categoryCounts } =
+  computeCategories(lookup, posMap, demonyms, states, cities);
+
+// Validate: every word in lookup must have an entry in wordCategories
+let allLookupWords = new Set();
+for (const words of Object.values(lookup)) {
+  for (const w of words) allLookupWords.add(w);
+}
+let missing = 0;
+for (const w of allLookupWords) {
+  if (!(w in wordCategories)) {
+    missing++;
+    if (missing <= 5) console.log(`  MISSING: ${w}`);
+  }
+}
+if (missing === 0) {
+  console.log(`  ✓ All ${allLookupWords.size.toLocaleString()} lookup words have category entries`);
+} else {
+  throw new Error(`Coverage check failed: ${missing} words missing from word_categories`);
+}
+
+// Write word_categories.json (sorted keys, sorted arrays, 2-space indent)
+const sortedCategoryKeys = Object.keys(wordCategories).sort();
+const sortedCategories = {};
+for (const k of sortedCategoryKeys) {
+  sortedCategories[k] = wordCategories[k];
+}
+
+fs.writeFileSync(CATEGORIES_FILE, JSON.stringify(sortedCategories, null, 2));
+console.log(`\nWritten to ${CATEGORIES_FILE}`);
+
+// Category breakdown
+console.log('\nCategory breakdown:');
+const sortedCats = Object.keys(categoryCounts).sort();
+for (const c of sortedCats) {
+  console.log(`  ${c}: ${categoryCounts[c].toLocaleString()} words`);
+}
+console.log(`  (untagged): ${untagged.toLocaleString()} words`);
+console.log(`  ──`);
+console.log(`  tagged: ${tagged.toLocaleString()}`);
+console.log(`  untagged: ${untagged.toLocaleString()}`);
+console.log(`  total: ${(tagged + untagged).toLocaleString()}`);
+
+// Sample category lookups
+console.log('\nSample category entries:');
+const samples = ['about', 'book', 'run', 'good', 'fast', 'small', 'american', 'french', 'canadian', 'abaya',
+  'texas', 'california', 'ohio', 'hawaii', 'chicago', 'phoenix', 'seattle', 'denver', 'miami'];
+for (const w of samples) {
+  if (w in sortedCategories) {
+    console.log(`  ${w}: [${sortedCategories[w].join(', ')}]`);
+  }
+}
+
 // ── Sort and Write ───────────────────────────────────
 
 console.log('\n═══ Writing Output ═══');
@@ -249,3 +535,5 @@ console.log(`  Active buckets: ${finalKeys.length}/676`);
 console.log(`  Empty buckets: ${finalEmpty.length}`);
 console.log(`  Slurs filtered: ${slursFiltered}`);
 console.log(`  Demonyms added: ${demonymsAdded}`);
+console.log(`  US states added: ${statesAdded}`);
+console.log(`  US cities added: ${citiesAdded}`);

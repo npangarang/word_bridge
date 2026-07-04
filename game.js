@@ -34,9 +34,23 @@ let currentEndLetter = null;
 let timerInterval = null;
 let submitted = false;
 let wordLookupClient = {};
+let wordCategoriesClient = {};
+let roomCategories = { noun: true, verb: true, adjective: true, adverb: true, countries: true, us_states: true, us_cities: true };
 let autoJoinRoomCode = null;  // from URL param ?room=
 
 const $ = id => document.getElementById(id);
+
+// Display order + labels for category toggles (used by renderCategoryToggles).
+const CATEGORY_LABELS = {
+  noun: 'Nouns',
+  verb: 'Verbs',
+  adjective: 'Adjectives',
+  adverb: 'Adverbs',
+  countries: 'Countries',
+  us_states: 'US States',
+  us_cities: 'US Cities'
+};
+const CATEGORY_ORDER = ['noun', 'verb', 'adjective', 'adverb', 'countries', 'us_states', 'us_cities'];
 
 // === Retro Sound Engine (Web Audio API) ===
 let audioCtx = null;
@@ -92,18 +106,35 @@ function sfxWin() {
 function sfxLose() { playSweep(400, 100, 0.4, 'sawtooth'); }
 function sfxReady() { playBeep(700, 0.06); setTimeout(() => playBeep(1000, 0.08), 60); }
 
+// Tracks in-flight screen transition so overlapping calls don't stack animationend listeners
+let _pendingTransition = null;
+
 function showScreen(screenId, instant = false) {
+  // Cancel any in-flight transition before starting a new one
+  if (_pendingTransition) {
+    const { el, handler } = _pendingTransition;
+    el.removeEventListener('animationend', handler);
+    handler();  // synchronously clean up the old transition
+    _pendingTransition = null;
+  }
+
   const current = document.querySelector('.screen.active');
   if (!instant && current && current.id !== screenId) {
     current.classList.add('exiting');
-    current.addEventListener('animationend', function handler() {
+    const handler = function() {
       current.removeEventListener('animationend', handler);
+      if (_pendingTransition && _pendingTransition.handler === handler) {
+        _pendingTransition = null;
+      }
       current.classList.remove('active', 'exiting');
       const next = $(screenId);
       next.classList.add('active');
-    }, { once: true });
+    };
+    _pendingTransition = { el: current, handler };
+    current.addEventListener('animationend', handler, { once: true });
   } else {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active', 'exiting'));
+    _pendingTransition = null;
     $(screenId).classList.add('active');
   }
 }
@@ -254,6 +285,16 @@ function loadWordLookup() {
     .catch(err => console.error('Failed to load word lookup:', err));
 }
 
+function loadWordCategories() {
+  return fetch('/word_categories.json')
+    .then(r => r.json())
+    .then(data => {
+      wordCategoriesClient = data || {};
+      console.log('Word categories loaded:', Object.keys(wordCategoriesClient).length, 'words');
+    })
+    .catch(err => console.error('Failed to load word categories:', err));
+}
+
 function validateClientWord(word, startLetter, endLetter) {
   const w = word.toLowerCase();
   const s = startLetter.toLowerCase();
@@ -266,6 +307,18 @@ function validateClientWord(word, startLetter, endLetter) {
   const key = s + e;
   const words = wordLookupClient[key];
   if (!words || !words.has(w)) return { valid: false, reason: 'Word not in dictionary' };
+
+  // Category check (only when at least one category is disabled).
+  // Untagged words (no entry or empty array) always pass — matches server logic.
+  const hasDisabled = Object.values(roomCategories).some(v => v === false);
+  if (hasDisabled) {
+    const wordCats = wordCategoriesClient[w];
+    if (wordCats && wordCats.length > 0) {
+      if (!wordCats.some(cat => roomCategories[cat])) {
+        return { valid: false, reason: 'Word not in selected categories' };
+      }
+    }
+  }
 
   return { valid: true };
 }
@@ -345,6 +398,9 @@ function renderRoomLobby() {
   } else {
     startBtn.style.display = 'none';
   }
+
+  // Category toggles reflect current isHost + roomCategories state
+  renderCategoryToggles();
 }
 
 function copyToClipboard(text) {
@@ -361,6 +417,46 @@ function copyToClipboard(text) {
   try { document.execCommand('copy'); } catch(e) {}
   document.body.removeChild(ta);
   return Promise.resolve();
+}
+
+// === Category toggles (host-controlled) ===
+// Renders one button per category. Host can click to flip the state.
+// Non-host sees the same buttons but in a read-only (dimmed) state.
+function renderCategoryToggles() {
+  const container = $('categoryTogglesRow');
+  if (!container) return;
+
+  // Subtitle communicates who controls the toggles
+  const subtitle = $('categoryTogglesSubtitle');
+  if (subtitle) {
+    subtitle.textContent = isHost ? 'TAP TO TOGGLE' : 'HOST ONLY';
+    subtitle.classList.toggle('host-mode', isHost);
+    subtitle.classList.toggle('readonly-mode', !isHost);
+  }
+
+  container.innerHTML = CATEGORY_ORDER.map(cat => {
+    const isOn = !!roomCategories[cat];
+    const label = CATEGORY_LABELS[cat] || cat;
+    const stateClass = isOn ? 'active' : 'inactive';
+    const disabledClass = isHost ? '' : 'disabled';
+    const disabledAttrs = isHost ? '' : 'tabindex="-1" aria-disabled="true"';
+    const role = isHost ? 'switch' : '';
+    const checked = isHost ? (isOn ? 'true' : 'false') : '';
+    return `
+      <button type="button"
+              class="category-toggle ${stateClass} ${disabledClass}"
+              data-category="${cat}"
+              role="${role}"
+              ${role ? `aria-checked="${checked}"` : ''}
+              aria-label="${escapeHtml(label)} category${isHost ? '' : ' (host only)'}"
+              ${disabledAttrs}>
+        <span class="category-label">${escapeHtml(label)}</span>
+        <span class="toggle-switch" aria-hidden="true">
+          <span class="toggle-knob"></span>
+        </span>
+      </button>
+    `;
+  }).join('');
 }
 
 function resetRoomState() {
@@ -389,6 +485,7 @@ socket.on('reactionReceived', (data) => {
 });
 
 loadWordLookup();
+loadWordCategories();
 
 // === Name screen ===
 $('enterLobbyBtn').addEventListener('click', () => {
@@ -459,6 +556,19 @@ $('readyUpLobbyBtn').addEventListener('click', () => {
 
 $('startGameBtn').addEventListener('click', () => {
   socket.emit('startGame');
+});
+
+// Category toggle click handler — uses event delegation on the stable row container.
+// Only the host can flip state; non-hosts are blocked here too as a safety net.
+$('categoryTogglesRow').addEventListener('click', (e) => {
+  const btn = e.target.closest('.category-toggle');
+  if (!btn) return;
+  if (!isHost) return;
+  const cat = btn.dataset.category;
+  if (!cat || typeof roomCategories[cat] === 'undefined') return;
+  roomCategories[cat] = !roomCategories[cat];
+  renderCategoryToggles();
+  socket.emit('updateCategories', roomCategories);
 });
 
 $('leaveRoomLobbyBtn').addEventListener('click', () => {
@@ -654,6 +764,7 @@ socket.on('roomCreated', (data) => {
   roomHostId = data.hostId;
   isHost = true;
   players = (data.players || []).map(p => ({ ...p }));
+  roomCategories = data.categories || { ...roomCategories };
   renderRoomLobby();
   showScreen('roomLobbyScreen');
 });
@@ -663,6 +774,7 @@ socket.on('roomJoined', (data) => {
   roomHostId = data.hostId;
   isHost = (data.hostId === myPlayerId);
   players = (data.players || []).map(p => ({ ...p }));
+  roomCategories = data.categories || { ...roomCategories };
   renderRoomLobby();
   showScreen('roomLobbyScreen');
 });
@@ -931,11 +1043,34 @@ socket.on('gameEnd', (data) => {
 });
 
 socket.on('gameReset', (data) => {
+  // Clear any stale result/end-screen content
+  if ($('resultCards')) $('resultCards').innerHTML = '';
+  if ($('resultScores')) $('resultScores').innerHTML = '';
+  if ($('examplesContainer')) $('examplesContainer').innerHTML = '';
+  if ($('finalRankings')) $('finalRankings').innerHTML = '';
+  if ($('winnerDisplay')) {
+    $('winnerDisplay').textContent = '';
+    $('winnerDisplay').classList.remove('win', 'tie');
+  }
+
+  // Reset game state
   players = (data.players || []).map(p => ({ ...p }));
   roomHostId = data.hostId;
   isHost = (roomHostId === myPlayerId);
+  roomCategories = data.categories || { ...roomCategories };
+  clearInterval(timerInterval);
+
   renderRoomLobby();
-  showScreen('roomLobbyScreen');
+  showScreen('roomLobbyScreen', true /* instant — skip animation to avoid race */);
+});
+
+// Server pushes the authoritative category list whenever the host changes it.
+// Re-render so all clients (host + non-host) see the new state immediately.
+socket.on('categoriesUpdated', (data) => {
+  if (data && data.categories) {
+    roomCategories = data.categories;
+    renderCategoryToggles();
+  }
 });
 
 // === Timer ===
