@@ -9,6 +9,13 @@ const socket = io({
   timeout: 20000
 });
 
+// Re-authenticate on reconnect (server connection state recovery fallback)
+socket.on('connect', () => {
+  if (myName) {
+    socket.emit('setName', myName);
+  }
+});
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && !socket.connected) {
     socket.connect();
@@ -779,11 +786,33 @@ socket.on('roomJoined', (data) => {
   showScreen('roomLobbyScreen');
 });
 
+// Reconnection: server restores room state after recovery
+socket.on('roomStateRestored', (data) => {
+  myRoomCode = data.code;
+  roomHostId = data.hostId;
+  isHost = (data.hostId === myPlayerId);
+  players = (data.players || []).map(p => ({ ...p }));
+  roomCategories = data.categories || { ...roomCategories };
+  renderRoomLobby();
+  // Navigate to correct screen based on room state
+  if (data.state === 'lobby') {
+    showScreen('roomLobbyScreen', true);
+  }
+});
+
 socket.on('playerJoined', (data) => {
   const existing = players.find(p => p.id === data.player.id);
   if (!existing) {
     players.push({ ...data.player });
   }
+  renderRoomLobby();
+});
+
+// Reconnection: another player rejoined the room
+socket.on('playerRejoined', (data) => {
+  players = (data.players || []).map(p => ({ ...p }));
+  roomHostId = data.hostId;
+  isHost = (roomHostId === myPlayerId);
   renderRoomLobby();
 });
 

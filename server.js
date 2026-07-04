@@ -13,7 +13,11 @@ const io = new Server(server, {
   transports: ['polling', 'websocket'],
   pingTimeout: 60000,
   pingInterval: 25000,
-  connectTimeout: 45000
+  connectTimeout: 45000,
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+    skipMiddlewares: true
+  }
 });
 
 const PORT = process.env.PORT || 3000;
@@ -41,6 +45,7 @@ const rooms = new Map();
 const roomTimers = new Map();
 const pauseTimers = new Map();
 const onlinePlayers = new Map();
+const disconnectTimers = new Map();
 
 // ── Helpers ──────────────────────────────────────────
 
@@ -133,6 +138,12 @@ function broadcastToRoom(roomCode, event, data) {
 function removePlayerFromRoom(socketId, roomCode, reason) {
   const room = rooms.get(roomCode);
   if (!room) return;
+
+  // Cancel any pending disconnect cleanup for this socket (explicit leave)
+  if (disconnectTimers.has(socketId)) {
+    clearTimeout(disconnectTimers.get(socketId));
+    disconnectTimers.delete(socketId);
+  }
 
   const wasHost = room.host === socketId;
 
@@ -340,7 +351,58 @@ function endGame(roomCode) {
 // ── Socket Handlers ──────────────────────────────────
 
 io.on('connection', (socket) => {
-  console.log('Player connected:', socket.id);
+  console.log('Player connected:', socket.id, socket.recovered ? '(recovered)' : '(new)');
+
+  // Handle reconnection recovery
+  if (socket.recovered && socket.data.playerName) {
+    // Cancel any pending disconnect cleanup
+    if (disconnectTimers.has(socket.id)) {
+      clearTimeout(disconnectTimers.get(socket.id));
+      disconnectTimers.delete(socket.id);
+    }
+
+    const previousRoomCode = socket.data.roomCode || null;
+    const previousStatus = socket.data.status || 'online';
+
+    // Restore onlinePlayers entry
+    onlinePlayers.set(socket.id, {
+      name: socket.data.playerName,
+      status: previousStatus,
+      roomCode: previousRoomCode
+    });
+
+    // If they were in a room that still exists and they're not already in room.players, add them back
+    if (previousRoomCode && rooms.has(previousRoomCode)) {
+      const room = rooms.get(previousRoomCode);
+      if (room && !room.players.find(p => p.id === socket.id)) {
+        room.players.push({
+          id: socket.id,
+          name: socket.data.playerName,
+          score: 0,
+          ready: false,
+          submission: null
+        });
+        broadcastToRoom(previousRoomCode, 'playerRejoined', {
+          playerId: socket.id,
+          players: room.players,
+          hostId: room.host
+        });
+      }
+      // Also notify the reconnected player about the room they're in
+      socket.emit('roomStateRestored', {
+        code: previousRoomCode,
+        players: room.players,
+        hostId: room.host,
+        maxPlayers: room.maxPlayers,
+        categories: room.categories,
+        state: room.state
+      });
+    }
+
+    socket.emit('nameConfirmed', { playerId: socket.id, name: socket.data.playerName });
+    broadcastOnlinePlayers();
+    console.log(`${socket.data.playerName} reconnected`);
+  }
 
   // ── Lobby / Name ──────────────────────────────────
 
@@ -351,11 +413,30 @@ io.on('connection', (socket) => {
     }
 
     const cleanName = name.trim().substring(0, 20);
+
+    // Cancel any pending disconnect cleanup
+    if (disconnectTimers.has(socket.id)) {
+      clearTimeout(disconnectTimers.get(socket.id));
+      disconnectTimers.delete(socket.id);
+    }
+
+    // Preserve existing room state if already restored by connection recovery
+    const existing = onlinePlayers.get(socket.id);
+    const existingRoomCode = (existing && existing.roomCode) || null;
+    const existingStatus = existingRoomCode ? 'in_room' : 'online';
+
     onlinePlayers.set(socket.id, {
       name: cleanName,
-      status: 'online',
-      roomCode: null
+      status: existingStatus,
+      roomCode: existingRoomCode
     });
+
+    // Store on socket.data for reconnection recovery — don't overwrite room state
+    socket.data.playerName = cleanName;
+    if (!existingRoomCode) {
+      socket.data.status = 'online';
+      socket.data.roomCode = null;
+    }
 
     socket.emit('nameConfirmed', { playerId: socket.id, name: cleanName });
     broadcastOnlinePlayers();
@@ -371,6 +452,7 @@ io.on('connection', (socket) => {
 
     const cleanName = name.trim().substring(0, 20);
     player.name = cleanName;
+    socket.data.playerName = cleanName;
     socket.emit('nameConfirmed', { playerId: socket.id, name: cleanName });
     broadcastOnlinePlayers();
   });
@@ -411,6 +493,8 @@ io.on('connection', (socket) => {
     rooms.set(roomCode, room);
     player.status = 'in_room';
     player.roomCode = roomCode;
+    socket.data.status = 'in_room';
+    socket.data.roomCode = roomCode;
     socket.join(roomCode);
 
     socket.emit('roomCreated', {
@@ -472,6 +556,8 @@ io.on('connection', (socket) => {
 
     player.status = 'in_room';
     player.roomCode = roomCode;
+    socket.data.status = 'in_room';
+    socket.data.roomCode = roomCode;
     socket.join(roomCode);
 
     socket.emit('roomJoined', {
@@ -610,12 +696,20 @@ io.on('connection', (socket) => {
   });
 
   function handlePlayerLeaveRoom() {
+    // Cancel any pending disconnect cleanup
+    if (disconnectTimers.has(socket.id)) {
+      clearTimeout(disconnectTimers.get(socket.id));
+      disconnectTimers.delete(socket.id);
+    }
+
     const player = onlinePlayers.get(socket.id);
     if (!player || !player.roomCode) return;
     const roomCode = player.roomCode;
 
     player.status = 'online';
     player.roomCode = null;
+    socket.data.status = 'online';
+    socket.data.roomCode = null;
     socket.leave(roomCode);
 
     removePlayerFromRoom(socket.id, roomCode, 'leave');
@@ -707,16 +801,49 @@ io.on('connection', (socket) => {
 
   // ── Disconnect ────────────────────────────────────
 
-  socket.on('disconnect', () => {
-    console.log('Player disconnected:', socket.id);
+  socket.on('disconnect', (reason) => {
+    console.log('Player disconnected:', socket.id, reason);
     const player = onlinePlayers.get(socket.id);
-    if (player && player.roomCode) {
-      removePlayerFromRoom(socket.id, player.roomCode, 'disconnect');
-      player.status = 'online';
-      player.roomCode = null;
+
+    if (player) {
+      // Mark as disconnected but DON'T remove from room or onlinePlayers immediately
+      player.status = 'disconnected';
+      if (socket.data.status) socket.data.status = 'disconnected';
+      broadcastOnlinePlayers();
+
+      // Set a delayed cleanup timer
+      if (player.roomCode) {
+        // Cancel any existing timer for this socket
+        if (disconnectTimers.has(socket.id)) {
+          clearTimeout(disconnectTimers.get(socket.id));
+        }
+
+        const timer = setTimeout(() => {
+          disconnectTimers.delete(socket.id);
+          const p = onlinePlayers.get(socket.id);
+          // Only clean up if the player is still marked as disconnected (not reconnected)
+          if (p && p.status === 'disconnected') {
+            removePlayerFromRoom(socket.id, p.roomCode, 'disconnect');
+            onlinePlayers.delete(socket.id);
+            broadcastOnlinePlayers();
+          }
+        }, 30000); // 30 second grace period for reconnection
+
+        disconnectTimers.set(socket.id, timer);
+      } else {
+        // No room — clean up after a shorter delay
+        const timer = setTimeout(() => {
+          disconnectTimers.delete(socket.id);
+          const p = onlinePlayers.get(socket.id);
+          if (p && p.status === 'disconnected') {
+            onlinePlayers.delete(socket.id);
+            broadcastOnlinePlayers();
+          }
+        }, 15000);
+
+        disconnectTimers.set(socket.id, timer);
+      }
     }
-    onlinePlayers.delete(socket.id);
-    broadcastOnlinePlayers();
   });
 });
 
