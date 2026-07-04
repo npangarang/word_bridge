@@ -42,22 +42,19 @@ let timerInterval = null;
 let submitted = false;
 let wordLookupClient = {};
 let wordCategoriesClient = {};
-let roomCategories = { noun: true, verb: true, adjective: true, adverb: true, countries: true, us_states: true, us_cities: true };
+let roomCategories = { noun_adj_verb: true, countries: true, us_states: true, us_cities: true };
 let autoJoinRoomCode = null;  // from URL param ?room=
 
 const $ = id => document.getElementById(id);
 
 // Display order + labels for category toggles (used by renderCategoryToggles).
 const CATEGORY_LABELS = {
-  noun: 'Nouns',
-  verb: 'Verbs',
-  adjective: 'Adjectives',
-  adverb: 'Adverbs',
+  noun_adj_verb: 'noun / adj / verb',
   countries: 'Countries',
   us_states: 'US States',
   us_cities: 'US Cities'
 };
-const CATEGORY_ORDER = ['noun', 'verb', 'adjective', 'adverb', 'countries', 'us_states', 'us_cities'];
+const CATEGORY_ORDER = ['noun_adj_verb', 'countries', 'us_states', 'us_cities'];
 
 // === Retro Sound Engine (Web Audio API) ===
 let audioCtx = null;
@@ -351,7 +348,8 @@ function updateOnlinePlayersList(list) {
           <span class="status-dot status-${p.status === 'online' ? 'online' : 'busy'}"></span>
           <span class="player-name-text">${escapeHtml(p.name)}</span>
         </div>
-        ${p.status !== 'online' ? '<span class="in-game-label">IN GAME</span>' : ''}
+        ${p.status !== 'online' ? '<span class="in-game-label">IN GAME</span>' :
+          `<button class="challenge-btn" data-player-id="${p.id}" data-player-name="${escapeHtml(p.name)}" title="Challenge to a game">⚔</button>`}
       </div>
     `).join('');
 }
@@ -491,6 +489,219 @@ socket.on('reactionReceived', (data) => {
   showFloatingReaction(data.emoji, x, y);
 });
 
+// === Challenge system ===
+let pendingChallenge = null; // { challengerId, challengerName, targetId, targetName, categories, mode: 'send'|'receive' }
+let challengeTimerInterval = null;
+
+// Default challenge categories (matches room defaults)
+const DEFAULT_CHALLENGE_CATEGORIES = { noun_adj_verb: true, countries: true, us_states: true, us_cities: true };
+let challengeCategories = { ...DEFAULT_CHALLENGE_CATEGORIES };
+
+// Challenge button click delegation — opens send modal
+$('onlinePlayers').addEventListener('click', (e) => {
+  const btn = e.target.closest('.challenge-btn');
+  if (!btn) return;
+  const targetId = btn.dataset.playerId;
+  const targetName = btn.dataset.playerName;
+  if (!targetId) return;
+  openChallengeSendModal(targetId, targetName);
+});
+
+// ── Challenge Modal Rendering ──
+
+function openChallengeSendModal(targetId, targetName) {
+  challengeCategories = { ...DEFAULT_CHALLENGE_CATEGORIES };
+
+  pendingChallenge = { targetId, targetName, mode: 'send' };
+
+  $('challengeModalTitle').textContent = 'CHALLENGE';
+  $('challengeModalMsg').textContent = `Challenge ${targetName} to a game?`;
+
+  // Render category toggles
+  renderChallengeCategoryToggles();
+
+  // Buttons
+  $('challengeModalBtns').innerHTML = `
+    <button id="sendChallengeBtn" class="arcade-btn arcade-btn-primary">CHALLENGE</button>
+    <button id="cancelSendChallengeBtn" class="arcade-btn arcade-btn-secondary">CANCEL</button>
+  `;
+
+  // Hide timer
+  $('challengeModalTimer').style.display = 'none';
+
+  // Attach button handlers
+  $('sendChallengeBtn').addEventListener('click', () => {
+    socket.emit('challengePlayer', { targetId, categories: challengeCategories });
+    closeChallengeModal();
+    showToast(`Challenge sent to ${targetName}`);
+  });
+
+  $('cancelSendChallengeBtn').addEventListener('click', closeChallengeModal);
+
+  $('challengeModal').classList.add('active');
+}
+
+function openChallengeReceiveModal(challengerId, challengerName, categories) {
+  pendingChallenge = { challengerId, challengerName, categories, mode: 'receive' };
+
+  $('challengeModalTitle').textContent = 'CHALLENGE!';
+  $('challengeModalMsg').textContent = `${challengerName} challenges you to a game!`;
+
+  // Render categories as read-only tags
+  renderChallengeReceiveCategories(categories);
+
+  // Buttons
+  $('challengeModalBtns').innerHTML = `
+    <button id="acceptChallengeBtn" class="arcade-btn arcade-btn-primary">ACCEPT</button>
+    <button id="declineChallengeBtn" class="arcade-btn arcade-btn-secondary">DECLINE</button>
+  `;
+
+  // Show timer
+  $('challengeModalTimer').style.display = 'block';
+  // Restart timer bar animation
+  const fill = $('challengeModalTimer').querySelector('.challenge-timer-fill');
+  if (fill) {
+    fill.style.animation = 'none';
+    void fill.offsetWidth;
+    fill.style.animation = '';
+  }
+
+  // Attach button handlers
+  $('acceptChallengeBtn').addEventListener('click', () => {
+    if (!pendingChallenge) return;
+    socket.emit('acceptChallenge', pendingChallenge.challengerId);
+    closeChallengeModal();
+  });
+
+  $('declineChallengeBtn').addEventListener('click', () => {
+    if (!pendingChallenge) return;
+    socket.emit('declineChallenge', pendingChallenge.challengerId);
+    closeChallengeModal();
+  });
+
+  $('challengeModal').classList.add('active');
+}
+
+function renderChallengeCategoryToggles() {
+  const container = $('challengeModalCats');
+  container.innerHTML = `
+    <div class="challenge-cats-label">WORD CATEGORIES</div>
+    <div class="challenge-cats-grid">
+      ${CATEGORY_ORDER.map(cat => {
+        const isOn = challengeCategories[cat];
+        const label = CATEGORY_LABELS[cat] || cat;
+        return `
+          <button type="button" class="category-toggle-sm ${isOn ? 'active' : 'inactive'}" data-cat="${cat}">
+            <span class="cat-label-sm">${escapeHtml(label)}</span>
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  // Attach toggle handlers
+  container.querySelectorAll('.category-toggle-sm').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cat = btn.dataset.cat;
+      challengeCategories[cat] = !challengeCategories[cat];
+      btn.classList.toggle('active', challengeCategories[cat]);
+      btn.classList.toggle('inactive', !challengeCategories[cat]);
+    });
+  });
+}
+
+function renderChallengeReceiveCategories(categories) {
+  const container = $('challengeModalCats');
+  if (!categories) { container.innerHTML = ''; return; }
+
+  const catList = CATEGORY_ORDER.filter(cat => categories[cat]);
+  const offList = CATEGORY_ORDER.filter(cat => !categories[cat]);
+
+  if (catList.length === CATEGORY_ORDER.length) {
+    // All on — show nothing or a brief message
+    container.innerHTML = '<span class="challenge-cats-all">All categories</span>';
+  } else {
+    container.innerHTML = catList.map(cat => {
+      const label = CATEGORY_LABELS[cat] || cat;
+      return `<span class="challenge-cat-tag active">${escapeHtml(label)}</span>`;
+    }).join('') + offList.map(cat => {
+      const label = CATEGORY_LABELS[cat] || cat;
+      return `<span class="challenge-cat-tag inactive">${escapeHtml(label)}</span>`;
+    }).join('');
+  }
+}
+
+// ── Modal lifecycle ──
+
+function closeChallengeModal() {
+  $('challengeModal').classList.remove('active');
+  clearChallengeState();
+}
+
+function clearChallengeState() {
+  pendingChallenge = null;
+  if (challengeTimerInterval) {
+    clearInterval(challengeTimerInterval);
+    challengeTimerInterval = null;
+  }
+}
+
+// Backdrop click — close modal
+$('challengeModal').addEventListener('click', (e) => {
+  if (e.target === $('challengeModal')) {
+    if (pendingChallenge && pendingChallenge.mode === 'receive') {
+      socket.emit('declineChallenge', pendingChallenge.challengerId);
+    }
+    closeChallengeModal();
+  }
+});
+
+// ── Challenge socket events ──
+
+socket.on('challengeReceived', (data) => {
+  openChallengeReceiveModal(data.challengerId, data.challengerName, data.categories);
+  playBeep(800, 0.06);
+  setTimeout(() => playBeep(1000, 0.08), 60);
+});
+
+socket.on('challengeSent', (data) => {
+  showToast(`Challenge sent to ${data.targetName}`);
+});
+
+socket.on('challengeAccepted', (data) => {
+  clearChallengeState();
+  myRoomCode = data.roomCode;
+  roomHostId = data.hostId;
+  isHost = (data.hostId === myPlayerId);
+  players = (data.players || []).map(p => ({ ...p }));
+  // roundStart will follow shortly to show game screen
+});
+
+socket.on('challengeDeclined', (data) => {
+  clearChallengeState();
+  closeChallengeModal();
+  showToast(`${data.targetName} declined your challenge`);
+  socket.emit('requestOnlinePlayers');
+});
+
+socket.on('challengeExpired', (data) => {
+  clearChallengeState();
+  closeChallengeModal();
+  if (data.targetName) {
+    showToast(`Challenge to ${data.targetName} expired`);
+  }
+  socket.emit('requestOnlinePlayers');
+});
+
+socket.on('challengeCancelled', (data) => {
+  clearChallengeState();
+  closeChallengeModal();
+  if (data.challengerName) {
+    showToast(`${data.challengerName} cancelled the challenge`);
+  }
+  socket.emit('requestOnlinePlayers');
+});
+
 loadWordLookup();
 loadWordCategories();
 
@@ -628,8 +839,11 @@ $('wordInput').addEventListener('keydown', (e) => {
 });
 
 // === End screen buttons ===
+let playAgainVoted = false;
+
 $('playAgainBtn').addEventListener('click', () => {
-  socket.emit('restartGame');
+  if (playAgainVoted) return;
+  socket.emit('requestPlayAgain');
 });
 
 $('returnToLobbyBtn').addEventListener('click', () => {
@@ -1061,14 +1275,33 @@ socket.on('gameEnd', (data) => {
     }
   }
 
-  // Play Again: host only
-  if (isHost) {
-    $('playAgainBtn').style.display = 'inline-block';
-  } else {
-    $('playAgainBtn').style.display = 'none';
-  }
+  // Play Again: available to all players (consensus-based)
+  playAgainVoted = false;
+  $('playAgainBtn').style.display = 'inline-block';
+  $('playAgainBtn').textContent = 'PLAY AGAIN';
+  $('playAgainBtn').disabled = false;
 
   showScreen('endScreen');
+});
+
+socket.on('playAgainVote', ({ voteCount, playerCount, votedId }) => {
+  const btn = $('playAgainBtn');
+  if (!btn) return;
+
+  if (votedId === myPlayerId) {
+    playAgainVoted = true;
+    btn.textContent = 'READY ✓';
+    btn.disabled = true;
+  }
+
+  if (voteCount >= playerCount) {
+    // Both ready — gameReset will fire shortly, reset button state
+    btn.textContent = 'STARTING...';
+    btn.disabled = true;
+  } else if (voteCount > 0 && votedId !== myPlayerId) {
+    // Show progress without changing self state
+    btn.textContent = playAgainVoted ? 'READY ✓' : 'PLAY AGAIN';
+  }
 });
 
 socket.on('gameReset', (data) => {
@@ -1087,6 +1320,12 @@ socket.on('gameReset', (data) => {
   roomHostId = data.hostId;
   isHost = (roomHostId === myPlayerId);
   roomCategories = data.categories || { ...roomCategories };
+  playAgainVoted = false;
+  currentRound = 0;
+  roundDeadline = null;
+  currentStartLetter = null;
+  currentEndLetter = null;
+  submitted = false;
   clearInterval(timerInterval);
 
   renderRoomLobby();
