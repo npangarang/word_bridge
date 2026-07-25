@@ -313,14 +313,12 @@ function validateClientWord(word, startLetter, endLetter) {
   if (!words || !words.has(w)) return { valid: false, reason: 'Word not in dictionary' };
 
   // Category check (only when at least one category is disabled).
-  // Untagged words (no entry or empty array) always pass — matches server logic.
+  // Reject words that don't match any enabled category, including untagged words.
   const hasDisabled = Object.values(roomCategories).some(v => v === false);
   if (hasDisabled) {
     const wordCats = wordCategoriesClient[w];
-    if (wordCats && wordCats.length > 0) {
-      if (!wordCats.some(cat => roomCategories[cat])) {
-        return { valid: false, reason: 'Word not in selected categories' };
-      }
+    if (!wordCats || wordCats.length === 0 || !wordCats.some(cat => roomCategories[cat])) {
+      return { valid: false, reason: 'Word not in selected categories' };
     }
   }
 
@@ -674,6 +672,7 @@ socket.on('challengeAccepted', (data) => {
   roomHostId = data.hostId;
   isHost = (data.hostId === myPlayerId);
   players = (data.players || []).map(p => ({ ...p }));
+  roomCategories = data.categories || { ...roomCategories };
   // roundStart will follow shortly to show game screen
 });
 
@@ -967,6 +966,15 @@ socket.on('onlinePlayers', (players) => {
 });
 
 socket.on('error', (data) => {
+  // If the server rejected our word due to category mismatch, re-enable input
+  if (data.code === 'category_mismatch' && submitted) {
+    submitted = false;
+    $('wordInput').disabled = false;
+    $('wordInput').classList.remove('submitted-flash');
+    $('wordInput').focus();
+    $('wordInput').select();
+  }
+
   // Show on whichever error element is currently visible/active
   const lobbyErr = $('lobbyError');
   const nameErr = $('nameError');
@@ -1022,8 +1030,29 @@ socket.on('playerJoined', (data) => {
   renderRoomLobby();
 });
 
+// Disconnect banner: opponent disconnected mid-game
+let _disconnectBanner = null;
+function _showDisconnectBanner(playerName) {
+  _hideDisconnectBanner();
+  const banner = document.createElement('div');
+  banner.id = 'disconnectBanner';
+  banner.className = 'disconnect-banner';
+  banner.innerHTML = `<span class="disconnect-banner-icon">!</span> ${escapeHtml(playerName || 'Opponent')} disconnected. Waiting to reconnect&hellip;`;
+  document.body.appendChild(banner);
+}
+function _hideDisconnectBanner() {
+  const el = document.getElementById('disconnectBanner');
+  if (el) el.remove();
+  _disconnectBanner = null;
+}
+
+socket.on('opponentDisconnected', (data) => {
+  _showDisconnectBanner(data.playerName || 'Opponent');
+});
+
 // Reconnection: another player rejoined the room
 socket.on('playerRejoined', (data) => {
+  _hideDisconnectBanner();
   players = (data.players || []).map(p => ({ ...p }));
   roomHostId = data.hostId;
   isHost = (roomHostId === myPlayerId);
@@ -1047,6 +1076,7 @@ socket.on('playerLeft', (data) => {
   // Check if I'm still in the room
   if (!players.find(p => p.id === myPlayerId)) {
     // I was removed - go to lobby
+    _hideDisconnectBanner();
     resetRoomState();
     showScreen('lobbyScreen');
     socket.emit('requestOnlinePlayers');
@@ -1067,6 +1097,7 @@ socket.on('playerLeft', (data) => {
 });
 
 socket.on('roomLeft', () => {
+  _hideDisconnectBanner();
   resetRoomState();
   showScreen('lobbyScreen');
   socket.emit('requestOnlinePlayers');
@@ -1225,6 +1256,7 @@ socket.on('roundEnd', (data) => {
 });
 
 socket.on('gameEnd', (data) => {
+  _hideDisconnectBanner();
   clearInterval(timerInterval);
   $('timerBar').classList.remove('critical');
   $('gameScreen').classList.remove('screen-critical');
@@ -1305,6 +1337,7 @@ socket.on('playAgainVote', ({ voteCount, playerCount, votedId }) => {
 });
 
 socket.on('gameReset', (data) => {
+  _hideDisconnectBanner();
   // Clear any stale result/end-screen content
   if ($('resultCards')) $('resultCards').innerHTML = '';
   if ($('resultScores')) $('resultScores').innerHTML = '';

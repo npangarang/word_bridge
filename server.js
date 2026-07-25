@@ -78,7 +78,7 @@ function getRandomPair(pairs) {
   return keys[Math.floor(Math.random() * keys.length)];
 }
 
-function validateWord(word, startLetter, endLetter, room) {
+function validateWord(word, startLetter, endLetter) {
   const w = word.toLowerCase();
   const s = startLetter.toLowerCase();
   const e = endLetter.toLowerCase();
@@ -91,18 +91,22 @@ function validateWord(word, startLetter, endLetter, room) {
   const words = wordLookup[key];
   if (!words || !words.has(w)) return false;
 
-  // Category check (only when at least one category is disabled)
-  if (room && room.categories && Object.keys(room.categories).some(k => room.categories[k] === false)) {
-    const wordCats = wordCategories[w];
-    // Only filter if word has explicit categories (empty array = untagged = always valid)
-    if (wordCats && wordCats.length > 0) {
-      if (!wordCats.some(cat => room.categories[cat])) {
-        return false;
-      }
-    }
-  }
-
   return true;
+}
+
+// Check if a word belongs to at least one enabled category.
+// Only enforced when at least one category is disabled.
+// Untagged words (no entry or empty array) are rejected — consistent with
+// pair selection which ignores untagged words when determining which pairs to offer.
+function wordMatchesCategories(word, room) {
+  if (!room || !room.categories) return true;
+  const hasActiveFilter = Object.keys(room.categories).some(k => room.categories[k] === false);
+  if (!hasActiveFilter) return true;
+
+  const w = word.toLowerCase();
+  const wordCats = wordCategories[w];
+  if (!wordCats || wordCats.length === 0) return false;
+  return wordCats.some(cat => room.categories[cat]);
 }
 
 function getOnlinePlayersList() {
@@ -435,32 +439,36 @@ io.on('connection', (socket) => {
       roomCode: previousRoomCode
     });
 
-    // If they were in a room that still exists and they're not already in room.players, add them back
+    // If they were in a room that still exists, restore them
     if (previousRoomCode && rooms.has(previousRoomCode)) {
       const room = rooms.get(previousRoomCode);
-      if (room && !room.players.find(p => p.id === socket.id)) {
-        room.players.push({
-          id: socket.id,
-          name: socket.data.playerName,
-          score: 0,
-          ready: false,
-          submission: null
-        });
+      if (room) {
+        // If player was removed during disconnect — re-add them
+        if (!room.players.find(p => p.id === socket.id)) {
+          room.players.push({
+            id: socket.id,
+            name: socket.data.playerName,
+            score: 0,
+            ready: false,
+            submission: null
+          });
+        }
+        // Always notify the room so opponent's UI clears disconnect banner
         broadcastToRoom(previousRoomCode, 'playerRejoined', {
           playerId: socket.id,
           players: room.players,
           hostId: room.host
         });
+        // Also notify the reconnected player about the room they're in
+        socket.emit('roomStateRestored', {
+          code: previousRoomCode,
+          players: room.players,
+          hostId: room.host,
+          maxPlayers: room.maxPlayers,
+          categories: room.categories,
+          state: room.state
+        });
       }
-      // Also notify the reconnected player about the room they're in
-      socket.emit('roomStateRestored', {
-        code: previousRoomCode,
-        players: room.players,
-        hostId: room.host,
-        maxPlayers: room.maxPlayers,
-        categories: room.categories,
-        state: room.state
-      });
     }
 
     socket.emit('nameConfirmed', { playerId: socket.id, name: socket.data.playerName });
@@ -717,7 +725,7 @@ io.on('connection', (socket) => {
         for (const word of words) {
           const wordCats = wordCategories[word];
           // Only include pair if at least one word matches an active category.
-          // Untagged words alone do NOT qualify a pair (they still pass submission validation).
+          // Untagged words alone do NOT qualify a pair (they also fail submission validation).
           if (wordCats && wordCats.length > 0 && wordCats.some(cat => room.categories[cat])) {
             categoryPairs.add(key);
             break;
@@ -797,15 +805,42 @@ io.on('connection', (socket) => {
     const roomPlayer = getPlayer(room, socket.id);
     if (!roomPlayer || roomPlayer.submission) return; // already submitted
 
-    const isValid = validateWord(word, room.currentPair[0], room.currentPair[1], room);
+    // Check basic word validity (letters, dictionary)
+    const basicValid = validateWord(word, room.currentPair[0], room.currentPair[1]);
+
+    if (!basicValid) {
+      // Invalid word — record as submission with 0 points, player can't retry
+      const submissionTime = Date.now();
+      const timeTaken = (submissionTime - room.roundStartTime) / 1000;
+      roomPlayer.submission = {
+        word: word.toLowerCase(),
+        isValid: false,
+        timeTaken,
+        points: 0
+      };
+      broadcastToRoom(player.roomCode, 'playerSubmitted', {
+        playerId: socket.id,
+        playerName: roomPlayer.name
+      });
+      const allSubmitted = room.players.every(p => p.submission !== null);
+      if (allSubmitted) endRound(player.roomCode);
+      return;
+    }
+
+    // Category filter check — reject outright if word doesn't match
+    if (!wordMatchesCategories(word, room)) {
+      socket.emit('error', { message: 'Word does not match the selected categories', code: 'category_mismatch' });
+      return;
+    }
+
+    // Valid word — record submission with points
     const submissionTime = Date.now();
     const timeTaken = (submissionTime - room.roundStartTime) / 1000;
-
     roomPlayer.submission = {
       word: word.toLowerCase(),
-      isValid,
+      isValid: true,
       timeTaken,
-      points: isValid ? word.length : 0
+      points: word.length
     };
 
     broadcastToRoom(player.roomCode, 'playerSubmitted', {
@@ -1007,7 +1042,8 @@ io.on('connection', (socket) => {
     broadcastToRoom(roomCode, 'challengeAccepted', {
       roomCode,
       players: room.players,
-      hostId: room.host
+      hostId: room.host,
+      categories: room.categories
     });
 
     broadcastOnlinePlayers();
@@ -1112,6 +1148,19 @@ io.on('connection', (socket) => {
           clearTimeout(disconnectTimers.get(socket.id));
         }
 
+        // Check if in active game — use shorter grace period + notify opponent
+        const room = rooms.get(player.roomCode);
+        const isPlaying = room && room.state === 'playing';
+        const gracePeriod = isPlaying ? 15000 : 30000;
+
+        if (isPlaying) {
+          // Immediately notify remaining players that opponent disconnected
+          broadcastToRoom(player.roomCode, 'opponentDisconnected', {
+            playerId: socket.id,
+            playerName: player.name
+          });
+        }
+
         const timer = setTimeout(() => {
           disconnectTimers.delete(socket.id);
           const p = onlinePlayers.get(socket.id);
@@ -1121,7 +1170,7 @@ io.on('connection', (socket) => {
             onlinePlayers.delete(socket.id);
             broadcastOnlinePlayers();
           }
-        }, 30000); // 30 second grace period for reconnection
+        }, gracePeriod);
 
         disconnectTimers.set(socket.id, timer);
       } else {
