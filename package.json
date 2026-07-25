@@ -1,10 +1,25 @@
 {
   "name": "wordbridge",
   "version": "1.0.0",
-  "description": "1v1 real-time word game - bridge from start letter to end letter",
+  "description": "2-8 player real-time word game — bridge from start letter to end letter",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/npangarang/word_bridge"
+  },
+  "keywords": [
+    "word-game",
+    "multiplayer",
+    "real-time",
+    "socketio",
+    "express"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "compression": "^1.8.1",

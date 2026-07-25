@@ -53,15 +53,18 @@ Then open **http://localhost:3000** in two browser tabs.
 
 ### Render (Recommended)
 
-```bash
-# Install Render CLI
-brew install render
+1. Create a free account at [render.com](https://render.com)
+2. Connect your GitHub repository
+3. Create a new **Web Service** — Render auto-detects `render.yaml`
+4. Deploys automatically on push to `master`
 
-# Deploy
+Or use the [Render CLI](https://render.com/docs/cli):
+
+```bash
+npm install -g @render/cli
+render login
 render deploy
 ```
-
-The repo includes a `render.yaml` for one-click setup.
 
 ### Cloudflare Tunnel (Quick Alternative)
 

@@ -6,3 +6,4 @@ screenshots/
 .playwright-mcp/
 .slim/
 part-of-speech.txt
+.ignore
