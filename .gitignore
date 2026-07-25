@@ -1,6 +1,8 @@
-.playwright-mcp/
-.slim/deepwork/
 node_modules/
 server.log
-*.png
+.env
+screenshots/
+.opencode/
+.playwright-mcp/
+.slim/
 part-of-speech.txt
