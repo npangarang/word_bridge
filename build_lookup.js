@@ -2,10 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
+const { RegExpMatcher, englishDataset, englishRecommendedTransformers } = require('obscenity');
 
 // ── Configuration ────────────────────────────────────
 const PRIMARY_FILE = './words_scowl70.txt';
-const SLURS_FILE = './slurs_blacklist.txt';
 const COUNTRIES_FILE = './countries.txt';
 const STATES_FILE = './us_states.txt';
 const CITIES_FILE = './us_cities.txt';
@@ -31,19 +31,6 @@ function getSLKey(word) {
   }
 
   return start + end;
-}
-
-function loadSlursBlacklist() {
-  if (!fs.existsSync(SLURS_FILE)) {
-    console.log(`  No slurs file found at ${SLURS_FILE}, skipping blacklist`);
-    return new Set();
-  }
-  const content = fs.readFileSync(SLURS_FILE, 'utf8');
-  const slurs = content.split('\n')
-    .map(l => l.trim().toLowerCase())
-    .filter(l => l.length > 0 && !l.startsWith('#'));
-  console.log(`  Loaded ${slurs.length} slur entries from ${SLURS_FILE}`);
-  return new Set(slurs);
 }
 
 function loadCountries() {
@@ -219,11 +206,17 @@ function computeCategories(lookup, posMap, countries, states, cities) {
   return { wordCategories, tagged, untagged, categoryCounts };
 }
 
-function isValidPrimary(word, slursBlacklist) {
+// Supplementary slurs not covered by obscenity's default dictionary.
+// Encoded (reversed) to avoid committing offensive terms directly.
+const _encoded = ['cips', 'kcabtew', 'scips', 'skcabtew'];
+const _extraSlurSet = new Set(_encoded.map(s => s.split('').reverse().join('')));
+
+function isValidPrimary(word) {
   if (!word || word.length < MIN_LEN || word.length > MAX_LEN) return false;
   if (!/^[a-z]+$/.test(word)) return false;
   if (word.includes('--')) return false;
-  if (slursBlacklist.has(word)) return false;
+  if (slurMatcher.hasMatch(word)) return false;
+  if (_extraSlurSet.has(word)) return false;
   return true;
 }
 
@@ -257,10 +250,14 @@ function report(lookup, label) {
   console.log(`  Low coverage (<5 words): ${lowCoverage.length}`);
 }
 
-// ── Phase 1: Load Blacklist ──────────────────────────
+// ── Phase 1: Initialize Profanity Filter ─────────────
 
-console.log('═══ Phase 1: Load Blacklist ═══');
-const slursBlacklist = loadSlursBlacklist();
+console.log('═══ Phase 1: Initialize Profanity Filter ═══');
+const slurMatcher = new RegExpMatcher({
+  ...englishDataset.build(),
+  ...englishRecommendedTransformers,
+});
+console.log('  Profanity matcher initialized (obscenity)');
 
 // ── Phase 2: Primary Source (SCOWL 70) ───────────────
 
@@ -278,11 +275,11 @@ let slursFiltered = 0;
 
 for (const line of primaryLines) {
   const word = line.trim().toLowerCase();
-  if (slursBlacklist.has(word)) {
+  if (slurMatcher.hasMatch(word)) {
     slursFiltered++;
     continue;
   }
-  if (!isValidPrimary(word, slursBlacklist)) {
+  if (!isValidPrimary(word)) {
     primarySkipped++;
     continue;
   }
@@ -291,7 +288,7 @@ for (const line of primaryLines) {
   }
 }
 
-console.log(`  Skipped: ${primarySkipped}, Added: ${primaryAdded}, Slurs filtered: ${slursFiltered}`);
+console.log(`  Skipped: ${primarySkipped}, Added: ${primaryAdded}, Profanity filtered: ${slursFiltered}`);
 report(lookup, 'After SCOWL 70 (+ blacklist)');
 
 // ── Phase 3: Countries ────────────────────────────────
@@ -303,7 +300,7 @@ let countriesAdded = 0;
 let countriesSkipped = 0;
 
 for (const word of countries) {
-  if (!isValidPrimary(word, slursBlacklist)) {
+  if (!isValidPrimary(word)) {
     countriesSkipped++;
     continue;
   }
@@ -332,7 +329,7 @@ let statesAdded = 0;
 let statesSkipped = 0;
 
 for (const word of states) {
-  if (!isValidPrimary(word, slursBlacklist)) {
+  if (!isValidPrimary(word)) {
     statesSkipped++;
     continue;
   }
@@ -360,7 +357,7 @@ let citiesAdded = 0;
 let citiesSkipped = 0;
 
 for (const word of cities) {
-  if (!isValidPrimary(word, slursBlacklist)) {
+  if (!isValidPrimary(word)) {
     citiesSkipped++;
     continue;
   }

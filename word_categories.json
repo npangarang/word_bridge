@@ -8145,39 +8145,6 @@
     "noun_adj_verb",
     "us_cities"
   ],
-  "anal": [
-    "noun_adj_verb"
-  ],
-  "analcite": [
-    "noun_adj_verb"
-  ],
-  "analcites": [],
-  "analecta": [
-    "noun_adj_verb"
-  ],
-  "analects": [
-    "noun_adj_verb"
-  ],
-  "analemma": [
-    "noun_adj_verb"
-  ],
-  "analemmas": [
-    "noun_adj_verb"
-  ],
-  "analeptic": [
-    "noun_adj_verb"
-  ],
-  "analeptics": [],
-  "analgesia": [
-    "noun_adj_verb"
-  ],
-  "analgesic": [
-    "noun_adj_verb"
-  ],
-  "analgesics": [],
-  "anally": [
-    "noun_adj_verb"
-  ],
   "analog": [
     "noun_adj_verb"
   ],
@@ -8212,9 +8179,6 @@
   ],
   "analogues": [],
   "analogy": [
-    "noun_adj_verb"
-  ],
-  "analphabetic": [
     "noun_adj_verb"
   ],
   "analysand": [
@@ -9180,19 +9144,6 @@
     "noun_adj_verb"
   ],
   "annabergite": [
-    "noun_adj_verb"
-  ],
-  "annal": [
-    "noun_adj_verb"
-  ],
-  "annalist": [
-    "noun_adj_verb"
-  ],
-  "annalistic": [
-    "noun_adj_verb"
-  ],
-  "annalists": [],
-  "annals": [
     "noun_adj_verb"
   ],
   "annas": [],
@@ -10437,12 +10388,6 @@
   ],
   "anurias": [],
   "anurous": [
-    "noun_adj_verb"
-  ],
-  "anus": [
-    "noun_adj_verb"
-  ],
-  "anuses": [
     "noun_adj_verb"
   ],
   "anvil": [
@@ -12943,7 +12888,6 @@
   "arsenopyrite": [
     "noun_adj_verb"
   ],
-  "arsey": [],
   "arsine": [
     "noun_adj_verb"
   ],
@@ -13134,9 +13078,6 @@
   ],
   "artiodactyls": [],
   "artisan": [
-    "noun_adj_verb"
-  ],
-  "artisanal": [
     "noun_adj_verb"
   ],
   "artisans": [],
@@ -13639,9 +13580,6 @@
   "asquint": [
     "noun_adj_verb"
   ],
-  "ass": [
-    "noun_adj_verb"
-  ],
   "assagai": [
     "noun_adj_verb"
   ],
@@ -13707,12 +13645,6 @@
   "assayers": [],
   "assaying": [],
   "assays": [],
-  "assegai": [
-    "noun_adj_verb"
-  ],
-  "assegais": [
-    "noun_adj_verb"
-  ],
   "assemblage": [
     "noun_adj_verb"
   ],
@@ -13789,9 +13721,6 @@
   ],
   "assertors": [],
   "asserts": [],
-  "asses": [
-    "noun_adj_verb"
-  ],
   "assess": [
     "noun_adj_verb"
   ],
@@ -13828,10 +13757,6 @@
   "asseveration": [
     "noun_adj_verb"
   ],
-  "asshole": [
-    "noun_adj_verb"
-  ],
-  "assholes": [],
   "assibilate": [
     "noun_adj_verb"
   ],
@@ -13940,9 +13865,6 @@
   "assizes": [
     "noun_adj_verb"
   ],
-  "assn": [
-    "noun_adj_verb"
-  ],
   "assoc": [
     "noun_adj_verb"
   ],
@@ -13969,42 +13891,6 @@
   "assoiled": [],
   "assoiling": [],
   "assoils": [],
-  "assonance": [
-    "noun_adj_verb"
-  ],
-  "assonant": [
-    "noun_adj_verb"
-  ],
-  "assonantal": [
-    "noun_adj_verb"
-  ],
-  "assonants": [],
-  "assonate": [],
-  "assonated": [],
-  "assonates": [],
-  "assonating": [],
-  "assort": [
-    "noun_adj_verb"
-  ],
-  "assortative": [
-    "noun_adj_verb"
-  ],
-  "assorted": [
-    "noun_adj_verb"
-  ],
-  "assorter": [
-    "noun_adj_verb"
-  ],
-  "assorters": [],
-  "assorting": [],
-  "assortment": [
-    "noun_adj_verb"
-  ],
-  "assortments": [],
-  "assorts": [],
-  "asst": [
-    "noun_adj_verb"
-  ],
   "assuage": [
     "noun_adj_verb"
   ],
@@ -19148,24 +19034,6 @@
   "bast": [
     "noun_adj_verb"
   ],
-  "bastard": [
-    "noun_adj_verb"
-  ],
-  "bastardize": [
-    "noun_adj_verb"
-  ],
-  "bastardized": [
-    "noun_adj_verb"
-  ],
-  "bastardizes": [],
-  "bastardizing": [],
-  "bastardly": [
-    "noun_adj_verb"
-  ],
-  "bastards": [],
-  "bastardy": [
-    "noun_adj_verb"
-  ],
   "baste": [
     "noun_adj_verb"
   ],
@@ -21720,25 +21588,6 @@
   "bested": [
     "noun_adj_verb"
   ],
-  "bestial": [
-    "noun_adj_verb"
-  ],
-  "bestiality": [
-    "noun_adj_verb"
-  ],
-  "bestialize": [
-    "noun_adj_verb"
-  ],
-  "bestialized": [
-    "noun_adj_verb"
-  ],
-  "bestializes": [],
-  "bestializing": [
-    "noun_adj_verb"
-  ],
-  "bestially": [
-    "noun_adj_verb"
-  ],
   "bestiaries": [
     "noun_adj_verb"
   ],
@@ -23516,25 +23365,6 @@
     "noun_adj_verb"
   ],
   "bitartrates": [],
-  "bitch": [
-    "noun_adj_verb"
-  ],
-  "bitched": [],
-  "bitches": [],
-  "bitchier": [
-    "noun_adj_verb"
-  ],
-  "bitchiest": [
-    "noun_adj_verb"
-  ],
-  "bitchily": [],
-  "bitchiness": [
-    "noun_adj_verb"
-  ],
-  "bitching": [],
-  "bitchy": [
-    "noun_adj_verb"
-  ],
   "bitcoin": [],
   "bitcoins": [],
   "bite": [
@@ -24936,10 +24766,6 @@
   "blowing": [
     "noun_adj_verb"
   ],
-  "blowjob": [
-    "noun_adj_verb"
-  ],
-  "blowjobs": [],
   "blowlamp": [
     "noun_adj_verb"
   ],
@@ -25851,14 +25677,6 @@
   "bollixed": [],
   "bollixes": [],
   "bollixing": [],
-  "bollocking": [],
-  "bollockings": [],
-  "bollocks": [
-    "noun_adj_verb"
-  ],
-  "bollocksed": [],
-  "bollockses": [],
-  "bollocksing": [],
   "bolls": [],
   "bollworm": [
     "noun_adj_verb"
@@ -26225,20 +26043,6 @@
   ],
   "bonzes": [],
   "boo": [
-    "noun_adj_verb"
-  ],
-  "boob": [
-    "noun_adj_verb"
-  ],
-  "boobed": [],
-  "boobies": [
-    "noun_adj_verb"
-  ],
-  "boobing": [],
-  "booboo": [],
-  "booboos": [],
-  "boobs": [],
-  "booby": [
     "noun_adj_verb"
   ],
   "boodle": [
@@ -30258,8 +30062,6 @@
   "bulldozing": [
     "noun_adj_verb"
   ],
-  "bulldyke": [],
-  "bulldykes": [],
   "bulled": [],
   "bullet": [
     "noun_adj_verb"
@@ -30364,9 +30166,6 @@
   "bulls": [],
   "bullseye": [],
   "bullseyes": [],
-  "bullshit": [
-    "noun_adj_verb"
-  ],
   "bullshits": [],
   "bullshitted": [],
   "bullshitter": [],
@@ -39616,9 +39415,6 @@
     "noun_adj_verb"
   ],
   "chickens": [],
-  "chickenshit": [
-    "noun_adj_verb"
-  ],
   "chickenshits": [],
   "chickpea": [
     "noun_adj_verb"
@@ -39955,15 +39751,6 @@
   "ching": [
     "noun_adj_verb"
   ],
-  "chinkapin": [
-    "noun_adj_verb"
-  ],
-  "chinkapins": [],
-  "chinked": [
-    "noun_adj_verb"
-  ],
-  "chinking": [],
-  "chinks": [],
   "chinless": [
     "noun_adj_verb"
   ],
@@ -42824,8 +42611,6 @@
   "clever": [
     "noun_adj_verb"
   ],
-  "cleverdick": [],
-  "cleverdicks": [],
   "cleverer": [],
   "cleverest": [],
   "cleverly": [
@@ -44098,9 +43883,6 @@
   "cochleate": [
     "noun_adj_verb"
   ],
-  "cock": [
-    "noun_adj_verb"
-  ],
   "cockade": [
     "noun_adj_verb"
   ],
@@ -44230,42 +44012,10 @@
   "cockneys": [
     "noun_adj_verb"
   ],
-  "cockpit": [
-    "noun_adj_verb"
-  ],
-  "cockpits": [],
   "cockroach": [
     "noun_adj_verb"
   ],
   "cockroaches": [],
-  "cocks": [
-    "noun_adj_verb"
-  ],
-  "cockscomb": [
-    "noun_adj_verb"
-  ],
-  "cockscombs": [],
-  "cockshies": [
-    "noun_adj_verb"
-  ],
-  "cockshy": [
-    "noun_adj_verb"
-  ],
-  "cockspur": [
-    "noun_adj_verb"
-  ],
-  "cockspurs": [],
-  "cocksucker": [
-    "noun_adj_verb"
-  ],
-  "cocksuckers": [],
-  "cocksure": [
-    "noun_adj_verb"
-  ],
-  "cockswain": [
-    "noun_adj_verb"
-  ],
-  "cockswains": [],
   "cocktail": [
     "noun_adj_verb"
   ],
@@ -55218,9 +54968,6 @@
   "crypt": [
     "noun_adj_verb"
   ],
-  "cryptanalyst": [
-    "noun_adj_verb"
-  ],
   "cryptic": [
     "noun_adj_verb"
   ],
@@ -55399,15 +55146,6 @@
   ],
   "cuboids": [],
   "cubs": [],
-  "cuckold": [
-    "noun_adj_verb"
-  ],
-  "cuckolded": [],
-  "cuckolding": [],
-  "cuckoldry": [
-    "noun_adj_verb"
-  ],
-  "cuckolds": [],
   "cuckoo": [
     "noun_adj_verb"
   ],
@@ -55729,9 +55467,6 @@
     "noun_adj_verb"
   ],
   "culverts": [],
-  "cum": [
-    "preposition"
-  ],
   "cumber": [
     "noun_adj_verb"
   ],
@@ -55754,19 +55489,6 @@
   "cumbrousness": [
     "noun_adj_verb"
   ],
-  "cumin": [
-    "noun_adj_verb"
-  ],
-  "cummerbund": [
-    "noun_adj_verb"
-  ],
-  "cummerbunds": [],
-  "cumming": [],
-  "cums": [],
-  "cumshaw": [
-    "noun_adj_verb"
-  ],
-  "cumshaws": [],
   "cumulate": [
     "noun_adj_verb"
   ],
@@ -55828,10 +55550,6 @@
   "cunningly": [
     "noun_adj_verb"
   ],
-  "cunt": [
-    "noun_adj_verb"
-  ],
-  "cunts": [],
   "cup": [
     "noun_adj_verb"
   ],
@@ -64821,42 +64539,10 @@
   "dicing": [
     "noun_adj_verb"
   ],
-  "dick": [
-    "noun_adj_verb"
-  ],
   "dickens": [
     "noun_adj_verb"
   ],
   "dickenses": [],
-  "dicker": [
-    "noun_adj_verb"
-  ],
-  "dickered": [],
-  "dickering": [],
-  "dickers": [],
-  "dickey": [
-    "noun_adj_verb"
-  ],
-  "dickeys": [
-    "noun_adj_verb"
-  ],
-  "dickhead": [],
-  "dickheads": [],
-  "dickier": [],
-  "dickies": [
-    "noun_adj_verb"
-  ],
-  "dickiest": [],
-  "dicks": [
-    "noun_adj_verb"
-  ],
-  "dicky": [
-    "noun_adj_verb"
-  ],
-  "dickybird": [
-    "noun_adj_verb"
-  ],
-  "dickybirds": [],
   "diclinous": [
     "noun_adj_verb"
   ],
@@ -65431,12 +65117,6 @@
   ],
   "dilators": [],
   "dilatory": [
-    "noun_adj_verb"
-  ],
-  "dildo": [
-    "noun_adj_verb"
-  ],
-  "dildos": [
     "noun_adj_verb"
   ],
   "dilemma": [
@@ -72952,10 +72632,6 @@
   "dying": [
     "noun_adj_verb"
   ],
-  "dyke": [
-    "noun_adj_verb"
-  ],
-  "dykes": [],
   "dynamic": [
     "noun_adj_verb"
   ],
@@ -74790,27 +74466,6 @@
   ],
   "eisteddfods": [],
   "either": [
-    "noun_adj_verb"
-  ],
-  "ejaculate": [
-    "noun_adj_verb"
-  ],
-  "ejaculated": [
-    "noun_adj_verb"
-  ],
-  "ejaculates": [],
-  "ejaculating": [
-    "noun_adj_verb"
-  ],
-  "ejaculation": [
-    "noun_adj_verb"
-  ],
-  "ejaculations": [],
-  "ejaculator": [
-    "noun_adj_verb"
-  ],
-  "ejaculators": [],
-  "ejaculatory": [
     "noun_adj_verb"
   ],
   "eject": [
@@ -81530,16 +81185,6 @@
   "evading": [
     "noun_adj_verb"
   ],
-  "evaginate": [
-    "noun_adj_verb"
-  ],
-  "evaginated": [
-    "noun_adj_verb"
-  ],
-  "evaginates": [],
-  "evaginating": [
-    "noun_adj_verb"
-  ],
   "evaluate": [
     "noun_adj_verb"
   ],
@@ -84867,26 +84512,6 @@
   "faffed": [],
   "faffing": [],
   "faffs": [],
-  "fagaceous": [
-    "noun_adj_verb"
-  ],
-  "fagged": [
-    "noun_adj_verb"
-  ],
-  "fagging": [
-    "noun_adj_verb"
-  ],
-  "faggoting": [
-    "noun_adj_verb"
-  ],
-  "fagot": [
-    "noun_adj_verb"
-  ],
-  "fagoting": [
-    "noun_adj_verb"
-  ],
-  "fagots": [],
-  "fags": [],
   "fah": [],
   "fahlband": [
     "noun_adj_verb"
@@ -86401,19 +86026,6 @@
   "fecit": [
     "noun_adj_verb"
   ],
-  "feck": [
-    "noun_adj_verb"
-  ],
-  "feckless": [
-    "noun_adj_verb"
-  ],
-  "fecklessly": [
-    "noun_adj_verb"
-  ],
-  "fecklessness": [
-    "noun_adj_verb"
-  ],
-  "fecks": [],
   "fecula": [
     "noun_adj_verb"
   ],
@@ -86679,21 +86291,6 @@
   "fellahin": [],
   "fellahs": [],
   "fellas": [],
-  "fellate": [
-    "noun_adj_verb"
-  ],
-  "fellated": [],
-  "fellates": [],
-  "fellating": [],
-  "fellatio": [
-    "noun_adj_verb"
-  ],
-  "fellation": [
-    "noun_adj_verb"
-  ],
-  "fellations": [],
-  "fellator": [],
-  "fellators": [],
   "felled": [
     "noun_adj_verb"
   ],
@@ -95039,22 +94636,6 @@
     "noun_adj_verb"
   ],
   "fuchsins": [],
-  "fuck": [
-    "noun_adj_verb"
-  ],
-  "fucked": [],
-  "fucker": [
-    "noun_adj_verb"
-  ],
-  "fuckers": [],
-  "fuckhead": [
-    "noun_adj_verb"
-  ],
-  "fuckheads": [],
-  "fucking": [
-    "noun_adj_verb"
-  ],
-  "fucks": [],
   "fucoid": [
     "noun_adj_verb"
   ],
@@ -96797,8 +96378,6 @@
   "gang": [
     "noun_adj_verb"
   ],
-  "gangbanger": [],
-  "gangbangers": [],
   "gangboard": [
     "noun_adj_verb"
   ],
@@ -97280,9 +96859,6 @@
     "noun_adj_verb"
   ],
   "gasman": [
-    "noun_adj_verb"
-  ],
-  "gasmen": [
     "noun_adj_verb"
   ],
   "gasohol": [
@@ -106367,8 +105943,6 @@
   "handiwork": [
     "noun_adj_verb"
   ],
-  "handjob": [],
-  "handjobs": [],
   "handkerchief": [
     "noun_adj_verb"
   ],
@@ -112027,10 +111601,6 @@
   "hooked": [
     "noun_adj_verb"
   ],
-  "hooker": [
-    "noun_adj_verb"
-  ],
-  "hookers": [],
   "hooking": [],
   "hooknose": [
     "noun_adj_verb"
@@ -112484,9 +112054,6 @@
     "noun_adj_verb"
   ],
   "horses": [
-    "noun_adj_verb"
-  ],
-  "horseshit": [
     "noun_adj_verb"
   ],
   "horseshits": [],
@@ -118015,16 +117582,6 @@
   "incessantly": [
     "noun_adj_verb"
   ],
-  "incest": [
-    "noun_adj_verb"
-  ],
-  "incests": [],
-  "incestuous": [
-    "noun_adj_verb"
-  ],
-  "incestuously": [
-    "noun_adj_verb"
-  ],
   "inch": [
     "noun_adj_verb"
   ],
@@ -123424,19 +122981,6 @@
   "invaders": [],
   "invades": [],
   "invading": [
-    "noun_adj_verb"
-  ],
-  "invaginate": [
-    "noun_adj_verb"
-  ],
-  "invaginated": [
-    "noun_adj_verb"
-  ],
-  "invaginates": [],
-  "invaginating": [
-    "noun_adj_verb"
-  ],
-  "invagination": [
     "noun_adj_verb"
   ],
   "invalid": [
@@ -138749,12 +138293,6 @@
     "noun_adj_verb"
   ],
   "maestros": [],
-  "maffick": [
-    "noun_adj_verb"
-  ],
-  "mafficked": [],
-  "mafficking": [],
-  "mafficks": [],
   "mafia": [
     "noun_adj_verb"
   ],
@@ -141461,11 +140999,6 @@
   ],
   "mastoids": [],
   "masts": [],
-  "masturbate": [
-    "noun_adj_verb"
-  ],
-  "masturbated": [],
-  "masturbates": [],
   "masturbating": [],
   "masturbation": [
     "noun_adj_verb"
@@ -142482,10 +142015,6 @@
     "noun_adj_verb"
   ],
   "medicines": [],
-  "medick": [
-    "noun_adj_verb"
-  ],
-  "medicks": [],
   "medico": [
     "noun_adj_verb"
   ],
@@ -143067,7 +142596,6 @@
     "noun_adj_verb"
   ],
   "memberships": [],
-  "membranal": [],
   "membrane": [
     "noun_adj_verb"
   ],
@@ -146667,9 +146195,6 @@
     "noun_adj_verb"
   ],
   "mishears": [],
-  "mishit": [
-    "noun_adj_verb"
-  ],
   "mishits": [],
   "mishitting": [],
   "mishmash": [
@@ -149565,9 +149090,6 @@
   "motherboard": [],
   "motherboards": [],
   "mothered": [],
-  "motherfucker": [
-    "noun_adj_verb"
-  ],
   "motherhood": [
     "noun_adj_verb"
   ],
@@ -152790,7 +152312,6 @@
   "neb": [
     "noun_adj_verb"
   ],
-  "nebbich": [],
   "nebbish": [
     "noun_adj_verb"
   ],
@@ -153211,12 +152732,6 @@
   ],
   "negotiators": [],
   "negritude": [
-    "noun_adj_verb"
-  ],
-  "negro": [
-    "noun_adj_verb"
-  ],
-  "negroid": [
     "noun_adj_verb"
   ],
   "negus": [
@@ -154244,17 +153759,6 @@
   ],
   "nigeria": [
     "countries",
-    "noun_adj_verb"
-  ],
-  "niggard": [
-    "noun_adj_verb"
-  ],
-  "niggardly": [
-    "noun_adj_verb"
-  ],
-  "niggards": [],
-  "niggas": [],
-  "niggerhead": [
     "noun_adj_verb"
   ],
   "niggle": [
@@ -160422,14 +159926,6 @@
     "noun_adj_verb"
   ],
   "organzines": [],
-  "orgasm": [
-    "noun_adj_verb"
-  ],
-  "orgasmic": [
-    "noun_adj_verb"
-  ],
-  "orgasmically": [],
-  "orgasms": [],
   "orgastic": [
     "noun_adj_verb"
   ],
@@ -160443,13 +159939,7 @@
     "noun_adj_verb"
   ],
   "orgiasts": [],
-  "orgies": [
-    "noun_adj_verb"
-  ],
   "orgulous": [
-    "noun_adj_verb"
-  ],
-  "orgy": [
     "noun_adj_verb"
   ],
   "oriel": [
@@ -162325,13 +161815,6 @@
   ],
   "overalls": [],
   "overambition": [],
-  "overanalyze": [
-    "noun_adj_verb"
-  ],
-  "overanalyzed": [
-    "noun_adj_verb"
-  ],
-  "overanalyzes": [],
   "overanxious": [
     "noun_adj_verb"
   ],
@@ -164116,10 +163599,6 @@
   ],
   "pachalics": [],
   "pachas": [],
-  "pachinko": [
-    "noun_adj_verb"
-  ],
-  "pachinkos": [],
   "pachisi": [
     "noun_adj_verb"
   ],
@@ -165101,12 +164580,6 @@
     "noun_adj_verb"
   ],
   "panda": [
-    "noun_adj_verb"
-  ],
-  "pandanus": [
-    "noun_adj_verb"
-  ],
-  "pandanuses": [
     "noun_adj_verb"
   ],
   "pandas": [],
@@ -168601,10 +168074,6 @@
     "noun_adj_verb"
   ],
   "peninsulas": [],
-  "penis": [
-    "noun_adj_verb"
-  ],
-  "penises": [],
   "penitence": [
     "noun_adj_verb"
   ],
@@ -168675,7 +168144,6 @@
     "noun_adj_verb"
   ],
   "penninites": [],
-  "pennis": [],
   "pennon": [
     "noun_adj_verb"
   ],
@@ -173154,22 +172622,6 @@
   ],
   "pisolites": [],
   "pisos": [],
-  "piss": [
-    "noun_adj_verb"
-  ],
-  "pissed": [
-    "noun_adj_verb"
-  ],
-  "pisser": [],
-  "pissers": [],
-  "pisses": [],
-  "pissing": [
-    "noun_adj_verb"
-  ],
-  "pissoir": [],
-  "pissoirs": [],
-  "pisspot": [],
-  "pisspots": [],
   "pistachio": [
     "noun_adj_verb"
   ],
@@ -176596,7 +176048,6 @@
   "porer": [],
   "porers": [],
   "pores": [],
-  "porgies": [],
   "porgy": [
     "noun_adj_verb"
   ],
@@ -176627,24 +176078,6 @@
   ],
   "porkpies": [],
   "porky": [
-    "noun_adj_verb"
-  ],
-  "porn": [
-    "noun_adj_verb"
-  ],
-  "porno": [
-    "noun_adj_verb"
-  ],
-  "pornocracy": [
-    "noun_adj_verb"
-  ],
-  "pornographer": [
-    "noun_adj_verb"
-  ],
-  "pornographic": [
-    "noun_adj_verb"
-  ],
-  "pornography": [
     "noun_adj_verb"
   ],
   "porosity": [
@@ -177201,7 +176634,6 @@
   "postorbital": [
     "noun_adj_verb"
   ],
-  "postorgasmic": [],
   "postpaid": [
     "noun_adj_verb"
   ],
@@ -179842,9 +179274,6 @@
   "pricing": [
     "noun_adj_verb"
   ],
-  "prick": [
-    "noun_adj_verb"
-  ],
   "pricked": [],
   "pricker": [
     "noun_adj_verb"
@@ -179878,7 +179307,6 @@
   "prickly": [
     "noun_adj_verb"
   ],
-  "pricks": [],
   "pride": [
     "noun_adj_verb"
   ],
@@ -183952,19 +183380,6 @@
   "pussiest": [
     "noun_adj_verb"
   ],
-  "pussy": [
-    "noun_adj_verb"
-  ],
-  "pussycat": [
-    "noun_adj_verb"
-  ],
-  "pussycats": [],
-  "pussyfoot": [
-    "noun_adj_verb"
-  ],
-  "pussyfooted": [],
-  "pussyfooting": [],
-  "pussyfoots": [],
   "pustulant": [
     "noun_adj_verb"
   ],
@@ -186822,20 +186237,6 @@
   "rapacity": [
     "noun_adj_verb"
   ],
-  "rape": [
-    "noun_adj_verb"
-  ],
-  "raped": [
-    "noun_adj_verb"
-  ],
-  "raper": [
-    "noun_adj_verb"
-  ],
-  "rapers": [],
-  "rapes": [],
-  "rapeseed": [
-    "noun_adj_verb"
-  ],
   "rapid": [
     "noun_adj_verb"
   ],
@@ -186861,32 +186262,10 @@
   "raping": [
     "noun_adj_verb"
   ],
-  "rapist": [
-    "noun_adj_verb"
-  ],
-  "rapists": [],
   "rapparee": [
     "noun_adj_verb"
   ],
   "rapparees": [],
-  "rapped": [
-    "noun_adj_verb"
-  ],
-  "rappee": [
-    "noun_adj_verb"
-  ],
-  "rappees": [],
-  "rappel": [
-    "noun_adj_verb"
-  ],
-  "rappelled": [
-    "noun_adj_verb"
-  ],
-  "rappelling": [
-    "noun_adj_verb"
-  ],
-  "rappels": [],
-  "rappen": [],
   "rapper": [
     "noun_adj_verb"
   ],
@@ -187841,22 +187220,6 @@
   "reamers": [],
   "reaming": [],
   "reams": [],
-  "reanalyses": [
-    "noun_adj_verb"
-  ],
-  "reanalysis": [
-    "noun_adj_verb"
-  ],
-  "reanalyze": [
-    "noun_adj_verb"
-  ],
-  "reanalyzed": [
-    "noun_adj_verb"
-  ],
-  "reanalyzes": [],
-  "reanalyzing": [
-    "noun_adj_verb"
-  ],
   "reanimate": [
     "noun_adj_verb"
   ],
@@ -194895,29 +194258,6 @@
   "retaliatory": [
     "noun_adj_verb"
   ],
-  "retard": [
-    "noun_adj_verb"
-  ],
-  "retardant": [
-    "noun_adj_verb"
-  ],
-  "retardants": [],
-  "retardation": [
-    "noun_adj_verb"
-  ],
-  "retarded": [
-    "noun_adj_verb"
-  ],
-  "retarder": [
-    "noun_adj_verb"
-  ],
-  "retarders": [],
-  "retarding": [],
-  "retardment": [
-    "noun_adj_verb"
-  ],
-  "retardments": [],
-  "retards": [],
   "retaste": [
     "noun_adj_verb"
   ],
@@ -202372,9 +201712,6 @@
   "scary": [
     "noun_adj_verb"
   ],
-  "scat": [
-    "noun_adj_verb"
-  ],
   "scathe": [
     "noun_adj_verb"
   ],
@@ -205438,9 +204775,6 @@
     "noun_adj_verb"
   ],
   "sememes": [],
-  "semen": [
-    "noun_adj_verb"
-  ],
   "semester": [
     "noun_adj_verb"
   ],
@@ -206822,9 +206156,6 @@
     "noun_adj_verb"
   ],
   "sews": [],
-  "sex": [
-    "noun_adj_verb"
-  ],
   "sexagenarian": [
     "noun_adj_verb"
   ],
@@ -206966,9 +206297,6 @@
     "noun_adj_verb"
   ],
   "sexually": [
-    "noun_adj_verb"
-  ],
-  "sexy": [
     "noun_adj_verb"
   ],
   "seychelles": [
@@ -208002,10 +207330,6 @@
     "noun_adj_verb"
   ],
   "shigellas": [],
-  "shiitake": [
-    "noun_adj_verb"
-  ],
-  "shiitakes": [],
   "shikari": [
     "noun_adj_verb"
   ],
@@ -208304,40 +207628,8 @@
   "shirty": [
     "noun_adj_verb"
   ],
-  "shit": [
-    "noun_adj_verb"
-  ],
   "shitake": [],
   "shitakes": [],
-  "shite": [],
-  "shites": [],
-  "shitfaced": [],
-  "shithead": [
-    "noun_adj_verb"
-  ],
-  "shitheads": [],
-  "shithole": [],
-  "shithouse": [],
-  "shitless": [
-    "noun_adj_verb"
-  ],
-  "shitload": [],
-  "shitloads": [],
-  "shits": [],
-  "shitted": [],
-  "shittier": [
-    "noun_adj_verb"
-  ],
-  "shittiest": [
-    "noun_adj_verb"
-  ],
-  "shitting": [
-    "noun_adj_verb"
-  ],
-  "shitty": [
-    "noun_adj_verb"
-  ],
-  "shitwork": [],
   "shiv": [
     "noun_adj_verb"
   ],
@@ -212735,18 +212027,6 @@
   "slushy": [
     "noun_adj_verb"
   ],
-  "slut": [
-    "noun_adj_verb"
-  ],
-  "sluts": [],
-  "sluttier": [],
-  "sluttiest": [],
-  "sluttish": [
-    "noun_adj_verb"
-  ],
-  "slutty": [
-    "noun_adj_verb"
-  ],
   "sly": [
     "noun_adj_verb"
   ],
@@ -215203,7 +214483,6 @@
     "noun_adj_verb"
   ],
   "sonobuoys": [],
-  "sonofabitch": [],
   "sonogram": [
     "noun_adj_verb"
   ],
@@ -216316,15 +215595,6 @@
     "noun_adj_verb"
   ],
   "spasms": [],
-  "spastic": [
-    "noun_adj_verb"
-  ],
-  "spastically": [],
-  "spasticities": [],
-  "spasticity": [
-    "noun_adj_verb"
-  ],
-  "spastics": [],
   "spat": [
     "noun_adj_verb"
   ],
@@ -232049,7 +231319,6 @@
   "testy": [
     "noun_adj_verb"
   ],
-  "tetanal": [],
   "tetanic": [
     "noun_adj_verb"
   ],
@@ -234707,9 +233976,6 @@
     "noun_adj_verb"
   ],
   "tissues": [],
-  "tit": [
-    "noun_adj_verb"
-  ],
   "titan": [
     "noun_adj_verb"
   ],
@@ -234844,7 +234110,6 @@
     "noun_adj_verb"
   ],
   "titrations": [],
-  "tits": [],
   "titter": [
     "noun_adj_verb"
   ],
@@ -234853,7 +234118,6 @@
     "noun_adj_verb"
   ],
   "titters": [],
-  "titties": [],
   "tittivate": [
     "noun_adj_verb"
   ],
@@ -236828,12 +236092,6 @@
     "noun_adj_verb"
   ],
   "trafficators": [],
-  "trafficked": [],
-  "trafficker": [
-    "noun_adj_verb"
-  ],
-  "traffickers": [],
-  "trafficking": [],
   "traffics": [],
   "tragacanth": [
     "noun_adj_verb"
@@ -237068,7 +236326,6 @@
     "noun_adj_verb"
   ],
   "trannies": [],
-  "tranny": [],
   "tranquil": [
     "noun_adj_verb"
   ],
@@ -240385,13 +239642,6 @@
   "turbulently": [
     "noun_adj_verb"
   ],
-  "turd": [
-    "noun_adj_verb"
-  ],
-  "turdine": [
-    "noun_adj_verb"
-  ],
-  "turds": [],
   "turducken": [],
   "turduckens": [],
   "tureen": [
@@ -240753,10 +240003,6 @@
   "twangs": [],
   "twangy": [],
   "twas": [],
-  "twat": [
-    "noun_adj_verb"
-  ],
-  "twats": [],
   "twattle": [
     "noun_adj_verb"
   ],
@@ -240764,9 +240010,6 @@
     "noun_adj_verb"
   ],
   "twattles": [],
-  "twattling": [
-    "noun_adj_verb"
-  ],
   "twayblade": [
     "noun_adj_verb"
   ],
@@ -248177,9 +247420,6 @@
     "noun_adj_verb"
   ],
   "uralites": [],
-  "uranalysis": [
-    "noun_adj_verb"
-  ],
   "uranic": [
     "noun_adj_verb"
   ],
@@ -248846,20 +248086,6 @@
     "noun_adj_verb"
   ],
   "vagi": [],
-  "vagina": [
-    "noun_adj_verb"
-  ],
-  "vaginae": [],
-  "vaginal": [
-    "noun_adj_verb"
-  ],
-  "vaginally": [],
-  "vaginas": [
-    "noun_adj_verb"
-  ],
-  "vaginate": [
-    "noun_adj_verb"
-  ],
   "vaginectomy": [
     "noun_adj_verb"
   ],
@@ -253644,16 +252870,6 @@
   "waning": [
     "noun_adj_verb"
   ],
-  "wank": [
-    "noun_adj_verb"
-  ],
-  "wanked": [],
-  "wanker": [
-    "noun_adj_verb"
-  ],
-  "wankers": [],
-  "wanking": [],
-  "wanks": [],
   "wanly": [
     "noun_adj_verb"
   ],
@@ -256376,9 +255592,6 @@
     "noun_adj_verb"
   ],
   "whops": [],
-  "whore": [
-    "noun_adj_verb"
-  ],
   "whoredom": [
     "noun_adj_verb"
   ],
@@ -256394,7 +255607,6 @@
     "noun_adj_verb"
   ],
   "whoremasters": [],
-  "whores": [],
   "whoreson": [
     "noun_adj_verb"
   ],

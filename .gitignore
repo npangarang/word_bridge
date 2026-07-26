@@ -6,4 +6,5 @@ screenshots/
 .playwright-mcp/
 .slim/
 part-of-speech.txt
+slurs_blacklist.txt
 .ignore
