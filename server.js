@@ -22,6 +22,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const ROUND_TIME = 10;
+const COMFORT_ROUND_TIME = 15;
 const PAUSE_TIME = 5;
 const TOTAL_ROUNDS = 10;
 const MAX_PLAYERS = 8;
@@ -129,6 +130,18 @@ function getPlayer(room, socketId) {
   return room.players.find(p => p.id === socketId);
 }
 
+// Effective round duration for a room:
+// max of all player preferences (default = ROUND_TIME, comfort = COMFORT_ROUND_TIME).
+// A toggle mid-round only affects the NEXT round, never the current one.
+function getRoomRoundTime(room) {
+  if (!room || !room.players || room.players.length === 0) return ROUND_TIME;
+  let duration = ROUND_TIME;
+  for (const p of room.players) {
+    if (p.comfortMode && COMFORT_ROUND_TIME > duration) duration = COMFORT_ROUND_TIME;
+  }
+  return duration;
+}
+
 function reassignHost(room) {
   if (room.players.length > 0) {
     room.host = room.players[0].id;
@@ -217,10 +230,13 @@ function removePlayerFromRoom(socketId, roomCode, reason) {
 function startRoundTimer(roomCode) {
   clearRoomTimer(roomCode);
 
+  const room = rooms.get(roomCode);
+  const duration = getRoomRoundTime(room);
+
   const timer = setTimeout(() => {
     roomTimers.delete(roomCode);
     endRound(roomCode);
-  }, ROUND_TIME * 1000);
+  }, duration * 1000);
 
   roomTimers.set(roomCode, timer);
 }
@@ -328,13 +344,15 @@ function startNextRound(roomCode) {
   room.roundStartTime = Date.now();
   room.state = 'playing';
 
+  const duration = getRoomRoundTime(room);
+
   broadcastToRoom(roomCode, 'roundStart', {
     round: room.currentRound,
     totalRounds: TOTAL_ROUNDS,
     startLetter: room.currentPair[0].toUpperCase(),
     endLetter: room.currentPair[1].toUpperCase(),
-    timeLeft: ROUND_TIME,
-    deadline: room.roundStartTime + ROUND_TIME * 1000
+    timeLeft: duration,
+    deadline: room.roundStartTime + duration * 1000
   });
 
   startRoundTimer(roomCode);
@@ -403,13 +421,15 @@ function forceStartGame(roomCode) {
   room.roundStartTime = Date.now();
   room.state = 'playing';
 
+  const duration = getRoomRoundTime(room);
+
   broadcastToRoom(roomCode, 'roundStart', {
     round: room.currentRound,
     totalRounds: TOTAL_ROUNDS,
     startLetter: room.currentPair[0].toUpperCase(),
     endLetter: room.currentPair[1].toUpperCase(),
-    timeLeft: ROUND_TIME,
-    deadline: room.roundStartTime + ROUND_TIME * 1000
+    timeLeft: duration,
+    deadline: room.roundStartTime + duration * 1000
   });
 
   startRoundTimer(roomCode);
@@ -432,26 +452,37 @@ io.on('connection', (socket) => {
     const previousRoomCode = socket.data.roomCode || null;
     const previousStatus = socket.data.status || 'online';
 
+    // Preserve the player's comfort mode preference across the disconnect:
+    // prefer the still-live onlinePlayers entry, fall back to recovered socket.data.
+    const existingEntry = onlinePlayers.get(socket.id);
+    const previousComfort = (existingEntry && existingEntry.comfortMode) || socket.data.comfortMode || false;
+
     // Restore onlinePlayers entry
     onlinePlayers.set(socket.id, {
       name: socket.data.playerName,
       status: previousStatus,
-      roomCode: previousRoomCode
+      roomCode: previousRoomCode,
+      comfortMode: previousComfort
     });
 
     // If they were in a room that still exists, restore them
     if (previousRoomCode && rooms.has(previousRoomCode)) {
       const room = rooms.get(previousRoomCode);
       if (room) {
+        const existingRoomPlayer = room.players.find(p => p.id === socket.id);
         // If player was removed during disconnect — re-add them
-        if (!room.players.find(p => p.id === socket.id)) {
+        if (!existingRoomPlayer) {
           room.players.push({
             id: socket.id,
             name: socket.data.playerName,
             score: 0,
             ready: false,
-            submission: null
+            submission: null,
+            comfortMode: previousComfort
           });
+        } else {
+          // Player kept in the room during the grace period — re-sync preference
+          existingRoomPlayer.comfortMode = previousComfort;
         }
         // Always notify the room so opponent's UI clears disconnect banner
         broadcastToRoom(previousRoomCode, 'playerRejoined', {
@@ -500,7 +531,8 @@ io.on('connection', (socket) => {
     onlinePlayers.set(socket.id, {
       name: cleanName,
       status: existingStatus,
-      roomCode: existingRoomCode
+      roomCode: existingRoomCode,
+      comfortMode: existing ? !!existing.comfortMode : false
     });
 
     // Store on socket.data for reconnection recovery — don't overwrite room state
@@ -527,6 +559,20 @@ io.on('connection', (socket) => {
     socket.data.playerName = cleanName;
     socket.emit('nameConfirmed', { playerId: socket.id, name: cleanName });
     broadcastOnlinePlayers();
+
+    // Keep the room roster in sync if the player is currently in a room
+    if (player.roomCode) {
+      const room = rooms.get(player.roomCode);
+      if (room) {
+        const roomPlayer = getPlayer(room, socket.id);
+        if (roomPlayer) roomPlayer.name = cleanName;
+        broadcastToRoom(player.roomCode, 'playerUpdated', {
+          playerId: socket.id,
+          players: room.players,
+          hostId: room.host
+        });
+      }
+    }
   });
 
   socket.on('requestOnlinePlayers', () => {
@@ -551,7 +597,7 @@ io.on('connection', (socket) => {
       code: roomCode,
       host: socket.id,
       players: [
-        { id: socket.id, name: player.name, score: 0, ready: false, submission: null }
+        { id: socket.id, name: player.name, score: 0, ready: false, submission: null, comfortMode: !!player.comfortMode }
       ],
       state: 'lobby',
       currentRound: 0,
@@ -623,7 +669,8 @@ io.on('connection', (socket) => {
       name: player.name,
       score: 0,
       ready: false,
-      submission: null
+      submission: null,
+      comfortMode: !!player.comfortMode
     });
 
     player.status = 'in_room';
@@ -643,7 +690,7 @@ io.on('connection', (socket) => {
     // Notify others
     const newPlayer = room.players[room.players.length - 1];
     socket.to(roomCode).emit('playerJoined', {
-      player: { id: newPlayer.id, name: newPlayer.name, ready: newPlayer.ready }
+      player: { id: newPlayer.id, name: newPlayer.name, ready: newPlayer.ready, comfortMode: !!newPlayer.comfortMode }
     });
 
     broadcastOnlinePlayers();
@@ -690,6 +737,43 @@ io.on('connection', (socket) => {
     broadcastToRoom(player.roomCode, 'categoriesUpdated', {
       categories: room.categories
     });
+  });
+
+  // ── Comfort Mode (per-player preference) ───────────
+  // When enabled, the room's round duration extends to COMFORT_ROUND_TIME (15s).
+  // The toggle is per-player; the room's effective duration is the max of all
+  // players' preferences. A change takes effect on the NEXT round only — the
+  // current round's timer is never modified to avoid mid-round unfairness.
+  socket.on('setComfortMode', (data) => {
+    const payload = (data && typeof data === 'object') ? data : { enabled: data };
+    if (typeof payload.enabled !== 'boolean') {
+      socket.emit('error', { message: 'Invalid comfortMode value' });
+      return;
+    }
+
+    const player = onlinePlayers.get(socket.id);
+    if (!player) return;
+
+    // Persist on the online entry so reconnection preserves the preference.
+    player.comfortMode = payload.enabled;
+    // Also persist on socket.data so connection state recovery restores it.
+    socket.data.comfortMode = payload.enabled;
+
+    // Apply to the room player record (drives getRoomRoundTime).
+    if (player.roomCode) {
+      const room = rooms.get(player.roomCode);
+      if (room) {
+        const roomPlayer = room.players.find(p => p.id === socket.id);
+        if (roomPlayer) {
+          roomPlayer.comfortMode = payload.enabled;
+        }
+
+        broadcastToRoom(player.roomCode, 'comfortModeUpdated', {
+          playerId: socket.id,
+          comfortMode: payload.enabled
+        });
+      }
+    }
   });
 
   socket.on('startGame', () => {
@@ -754,13 +838,15 @@ io.on('connection', (socket) => {
     room.roundStartTime = Date.now();
     room.state = 'playing';
 
+    const duration = getRoomRoundTime(room);
+
     broadcastToRoom(player.roomCode, 'roundStart', {
       round: room.currentRound,
       totalRounds: TOTAL_ROUNDS,
       startLetter: room.currentPair[0].toUpperCase(),
       endLetter: room.currentPair[1].toUpperCase(),
-      timeLeft: ROUND_TIME,
-      deadline: room.roundStartTime + ROUND_TIME * 1000
+      timeLeft: duration,
+      deadline: room.roundStartTime + duration * 1000
     });
 
     startRoundTimer(player.roomCode);
@@ -1003,8 +1089,8 @@ io.on('connection', (socket) => {
       code: roomCode,
       host: challengerId,
       players: [
-        { id: challengerId, name: challenger.name, score: 0, ready: false, submission: null },
-        { id: socket.id, name: target.name, score: 0, ready: false, submission: null }
+        { id: challengerId, name: challenger.name, score: 0, ready: false, submission: null, comfortMode: !!challenger.comfortMode },
+        { id: socket.id, name: target.name, score: 0, ready: false, submission: null, comfortMode: !!target.comfortMode }
       ],
       state: 'lobby',
       currentRound: 0,

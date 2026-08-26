@@ -3,29 +3,37 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0a1a">
   <title>WordBridge - Multiplayer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Screen reader only announcements -->
+  <div id="srAnnounce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div id="srAlert" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="srTimer" class="sr-only" role="timer" aria-live="off"></div>
+
   <div class="container">
     <!-- ── NAME SCREEN ──────────────────────────────── -->
     <div id="nameScreen" class="screen active">
       <h1 class="arcade-title">WORD<br>BRIDGE</h1>
-      <button id="howToPlayBtn" class="how-to-play-btn" type="button">? HOW TO PLAY</button>
+      <button id="howToPlayBtn" class="how-to-play-btn" type="button">HOW TO PLAY</button>
 
-      <div class="input-group" style="margin-top: 32px;">
-        <input type="text" id="playerNameInput" class="arcade-input" placeholder="Enter your name" maxlength="20" />
+      <div class="input-group" style="margin-top: 24px;">
+        <label class="form-label" for="playerNameInput">Display name</label>
+        <input type="text" id="playerNameInput" class="arcade-input" placeholder="Enter your name" maxlength="20" autocomplete="given-name" />
 
         <div id="profileIndicator" class="profile-indicator" style="display:none;">
-          <span id="profileIndicatorEmoji"></span>
+          <span id="profileIndicatorEmoji" aria-hidden="true"></span>
           <span id="profileIndicatorName"></span>
-          <button id="profileIndicatorEditBtn" class="profile-edit-link">edit</button>
+          <button id="profileIndicatorEditBtn" class="profile-edit-link" type="button">edit</button>
         </div>
 
-        <button id="enterLobbyBtn" class="arcade-btn arcade-btn-primary">ENTER LOBBY</button>
+        <button id="enterLobbyBtn" class="arcade-btn arcade-btn-primary" type="button">ENTER LOBBY</button>
       </div>
 
-      <p id="nameError" class="error"></p>
+      <p id="nameError" class="error" role="alert"></p>
     </div>
 
     <!-- ── LOBBY SCREEN ─────────────────────────────── -->
@@ -33,55 +41,56 @@
       <div class="lobby-header">
         <h1 class="arcade-title small">LOBBY</h1>
         <div class="lobby-actions">
-          <button id="editNameBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small">EDIT NAME</button>
-          <button id="profileBtn" class="arcade-btn arcade-btn-small profile-btn" title="Edit Profile">
-            <svg viewBox="0 0 20 20" class="btn-icon" width="12" height="12"><circle cx="10" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 20c0-4 3-7 7-7s7 3 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <button id="editNameBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" type="button">EDIT NAME</button>
+          <button id="profileBtn" class="arcade-btn arcade-btn-small profile-btn" type="button" aria-label="Open profile and comfort settings">
+            <svg viewBox="0 0 20 20" class="btn-icon" width="12" height="12" aria-hidden="true"><circle cx="10" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 20c0-4 3-7 7-7s7 3 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             Profile
           </button>
         </div>
       </div>
 
       <div class="room-actions">
-        <button id="createRoomBtn" class="arcade-btn arcade-btn-primary">CREATE ROOM</button>
+        <button id="createRoomBtn" class="arcade-btn arcade-btn-primary" type="button">CREATE ROOM</button>
+        <label class="form-label" for="joinRoomInput">Room code</label>
         <div class="join-room-row">
-          <input id="joinRoomInput" class="arcade-input" placeholder="Room code" maxlength="6" />
-          <button id="joinRoomBtn" class="arcade-btn arcade-btn-secondary">JOIN</button>
+          <input id="joinRoomInput" class="arcade-input" placeholder="6-character room code" maxlength="6" autocomplete="off" />
+          <button id="joinRoomBtn" class="arcade-btn arcade-btn-secondary" type="button">JOIN</button>
         </div>
       </div>
 
-      <p id="lobbyError" class="error"></p>
+      <p id="lobbyError" class="error" role="alert"></p>
 
-      <p class="online-count">PLAYERS ONLINE: <span id="onlineCount">0</span></p>
-      <div id="onlinePlayers" class="players-list"></div>
-      <button id="refreshLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" style="margin-top: 8px;">REFRESH</button>
+      <p class="online-count"><span class="online-count-label">Players online:</span> <span id="onlineCount">0</span></p>
+      <div id="onlinePlayers" class="players-list" aria-label="Players you can challenge"></div>
+      <button id="refreshLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" type="button" style="margin-top: 8px;">REFRESH</button>
     </div>
 
     <!-- ── ROOM LOBBY SCREEN ────────────────────────── -->
     <div id="roomLobbyScreen" class="screen">
       <h1 class="arcade-title small">ROOM LOBBY</h1>
-      <div id="roomCodeDisplay" class="room-code-display">
-        <span class="room-code-label">ROOM CODE:</span>
+      <div id="roomCodeDisplay" class="room-code-display" aria-label="Room code">
+        <span class="room-code-label">ROOM CODE</span>
         <span id="roomCodeValue" class="room-code-value"></span>
         <div class="room-code-buttons">
-          <button id="copyRoomCodeBtn" class="arcade-btn arcade-btn-small">COPY CODE</button>
-          <button id="copyInviteLinkBtn" class="arcade-btn arcade-btn-small">COPY LINK</button>
+          <button id="copyRoomCodeBtn" class="arcade-btn arcade-btn-small" type="button">COPY CODE</button>
+          <button id="copyInviteLinkBtn" class="arcade-btn arcade-btn-small" type="button">COPY LINK</button>
         </div>
       </div>
-      <div id="roomPlayersList" class="players-list"></div>
+      <div id="roomPlayersList" class="players-list" aria-label="Players in this room"></div>
       <div id="categoryToggles" class="category-toggles">
         <div class="category-toggles-header">
-          <span class="category-toggles-title">WORD CATEGORIES</span>
+          <span class="category-toggles-title" id="categoryTogglesLabel">WORD CATEGORIES</span>
           <span class="category-toggles-subtitle" id="categoryTogglesSubtitle"></span>
         </div>
-        <div class="category-toggles-row" id="categoryTogglesRow">
+        <div class="category-toggles-row" id="categoryTogglesRow" role="group" aria-labelledby="categoryTogglesLabel">
           <!-- toggles rendered by JS -->
         </div>
       </div>
-      <p id="roomReadyStatus" class="waiting-text">0/0 ready</p>
+      <p id="roomReadyStatus" class="waiting-text" aria-live="polite">0/0 ready</p>
       <div class="room-lobby-btns">
-        <button id="readyUpLobbyBtn" class="arcade-btn arcade-btn-primary">READY UP</button>
-        <button id="startGameBtn" class="arcade-btn arcade-btn-primary" style="display:none;">START GAME</button>
-        <button id="leaveRoomLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small">LEAVE ROOM</button>
+        <button id="readyUpLobbyBtn" class="arcade-btn arcade-btn-primary" type="button" aria-pressed="false">READY UP</button>
+        <button id="startGameBtn" class="arcade-btn arcade-btn-primary" type="button" style="display:none;" disabled>START GAME</button>
+        <button id="leaveRoomLobbyBtn" class="arcade-btn arcade-btn-secondary arcade-btn-small" type="button">LEAVE ROOM</button>
       </div>
     </div>
 
@@ -89,35 +98,49 @@
     <div id="gameScreen" class="screen">
       <div class="game-header">
         <div class="game-header-info">
-          <span class="round-info">ROUND <span id="currentRound">1</span>/<span id="totalRounds">10</span></span>
-          <span class="room-code-chip" id="gameRoomCode"></span>
+          <p class="round-info" aria-live="polite" aria-atomic="true">
+            <span class="round-info-label">Round</span>
+            <strong><span id="currentRound">1</span> of <span id="totalRounds">10</span></strong>
+          </p>
+          <span class="room-code-chip" id="gameRoomCode" aria-label="Room code"></span>
         </div>
-        <div id="submissionsStatus" class="submissions-status"></div>
+        <div id="submissionsStatus" class="submissions-status" aria-live="polite" aria-label="Players who have submitted"></div>
       </div>
 
-      <div class="tiles">
+      <div class="tiles" aria-hidden="true">
         <div id="tile1" class="tile">A</div>
         <div id="tile2" class="tile">A</div>
       </div>
+      <p class="tile-pair-text sr-only" id="tilePairAnnounce">Start letter A, end letter A</p>
 
-      <div id="timerBar" class="timer-bar">
-        <div id="timerProgress" class="timer-progress"></div>
+      <p class="score-hint" id="scoreHint" aria-live="polite">
+        <span class="score-hint-row"><span class="dot dot-you"></span>You: <strong id="scoreHintYou">0</strong></span>
+        <span class="score-hint-divider"></span>
+        <span class="score-hint-row"><span class="dot dot-opp"></span>Opponents: <strong id="scoreHintOpp">0</strong></span>
+      </p>
+
+      <div class="timer" id="timer" role="timer" aria-label="Round timer">
+        <div id="timerBar" class="timer-bar">
+          <div id="timerProgress" class="timer-progress"></div>
+        </div>
+        <div id="timerDisplay" class="timer-display" aria-hidden="true">10</div>
+        <p class="timer-text-label">seconds left</p>
       </div>
-      <div id="timerDisplay" class="timer-display">10</div>
 
-      <input type="text" id="wordInput" class="word-input" placeholder="TYPE A WORD..." maxlength="20" autocomplete="off" />
+      <label class="sr-only" for="wordInput">Type your word for this round</label>
+      <input type="text" id="wordInput" class="word-input" placeholder="TYPE A WORD..." maxlength="20" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
 
-      <p class="submit-hint">PRESS ENTER TO SUBMIT</p>
+      <p class="submit-hint">Press <kbd>Enter</kbd> to submit</p>
 
-      <div class="reactions-bar" id="gameReactions">
-        <button class="reaction-btn" data-emoji="💨">💨</button>
-        <button class="reaction-btn" data-emoji="😂">😂</button>
-        <button class="reaction-btn" data-emoji="😱">😱</button>
-        <button class="reaction-btn" data-emoji="🔥">🔥</button>
-        <button class="reaction-btn" data-emoji="👏">👏</button>
-        <button class="reaction-btn" data-emoji="😢">😢</button>
-        <button class="reaction-btn" data-emoji="💀">💀</button>
-        <button class="reaction-btn" data-emoji="🤯">🤯</button>
+      <div class="reactions-bar" id="gameReactions" role="group" aria-label="Send an emoji reaction">
+        <button class="reaction-btn" data-emoji="💨" type="button" aria-label="Send poo emoji">💨</button>
+        <button class="reaction-btn" data-emoji="😂" type="button" aria-label="Send laughing emoji">😂</button>
+        <button class="reaction-btn" data-emoji="😱" type="button" aria-label="Send shocked emoji">😱</button>
+        <button class="reaction-btn" data-emoji="🔥" type="button" aria-label="Send fire emoji">🔥</button>
+        <button class="reaction-btn" data-emoji="👏" type="button" aria-label="Send clap emoji">👏</button>
+        <button class="reaction-btn" data-emoji="😢" type="button" aria-label="Send crying emoji">😢</button>
+        <button class="reaction-btn" data-emoji="💀" type="button" aria-label="Send skull emoji">💀</button>
+        <button class="reaction-btn" data-emoji="🤯" type="button" aria-label="Send mind-blown emoji">🤯</button>
       </div>
     </div>
 
@@ -125,26 +148,26 @@
     <div id="resultScreen" class="screen">
       <h1 class="arcade-title small">ROUND <span id="resultRound">1</span><br>RESULTS</h1>
 
-      <div id="resultCards"></div>
+      <div id="resultCards" aria-live="polite" aria-atomic="false"></div>
 
-      <div id="examplesContainer" class="examples-container"></div>
+      <div id="examplesContainer" class="examples-container" aria-live="polite"></div>
 
-      <div class="scores" id="resultScores"></div>
+      <div class="scores" id="resultScores" aria-label="Running totals"></div>
 
-      <div class="auto-advance-indicator" id="autoAdvanceIndicator">
+      <div class="auto-advance-indicator" id="autoAdvanceIndicator" aria-hidden="true">
         <span class="auto-advance-label">NEXT ROUND</span>
         <div class="auto-advance-bar"><div class="auto-advance-fill"></div></div>
       </div>
 
-      <div class="reactions-bar" id="resultReactions">
-        <button class="reaction-btn" data-emoji="💨">💨</button>
-        <button class="reaction-btn" data-emoji="😂">😂</button>
-        <button class="reaction-btn" data-emoji="😱">😱</button>
-        <button class="reaction-btn" data-emoji="🔥">🔥</button>
-        <button class="reaction-btn" data-emoji="👏">👏</button>
-        <button class="reaction-btn" data-emoji="😢">😢</button>
-        <button class="reaction-btn" data-emoji="💀">💀</button>
-        <button class="reaction-btn" data-emoji="🤯">🤯</button>
+      <div class="reactions-bar" id="resultReactions" role="group" aria-label="Send an emoji reaction">
+        <button class="reaction-btn" data-emoji="💨" type="button" aria-label="Send poo emoji">💨</button>
+        <button class="reaction-btn" data-emoji="😂" type="button" aria-label="Send laughing emoji">😂</button>
+        <button class="reaction-btn" data-emoji="😱" type="button" aria-label="Send shocked emoji">😱</button>
+        <button class="reaction-btn" data-emoji="🔥" type="button" aria-label="Send fire emoji">🔥</button>
+        <button class="reaction-btn" data-emoji="👏" type="button" aria-label="Send clap emoji">👏</button>
+        <button class="reaction-btn" data-emoji="😢" type="button" aria-label="Send crying emoji">😢</button>
+        <button class="reaction-btn" data-emoji="💀" type="button" aria-label="Send skull emoji">💀</button>
+        <button class="reaction-btn" data-emoji="🤯" type="button" aria-label="Send mind-blown emoji">🤯</button>
       </div>
     </div>
 
@@ -152,28 +175,28 @@
     <div id="endScreen" class="screen">
       <h1 class="arcade-title">GAME<br>OVER</h1>
 
-      <div id="finalRankings" class="rankings-list"></div>
+      <div id="finalRankings" class="rankings-list" aria-live="polite" aria-label="Final rankings"></div>
 
-      <div id="winnerDisplay" class="winner-text"></div>
+      <div id="winnerDisplay" class="winner-text" aria-live="assertive"></div>
 
       <div class="btn-row">
-        <button id="playAgainBtn" class="arcade-btn arcade-btn-primary" style="display:none;">PLAY AGAIN</button>
-        <button id="returnToLobbyBtn" class="arcade-btn arcade-btn-secondary">RETURN TO LOBBY</button>
+        <button id="playAgainBtn" class="arcade-btn arcade-btn-primary" type="button" style="display:none;">PLAY AGAIN</button>
+        <button id="returnToLobbyBtn" class="arcade-btn arcade-btn-secondary" type="button">RETURN TO LOBBY</button>
       </div>
     </div>
   </div>
 
   <!-- ── TUTORIAL MODAL (HOW TO PLAY) ───────────── -->
-  <div id="tutorialModal" class="modal-overlay tutorial-overlay">
+  <div id="tutorialModal" class="modal-overlay tutorial-overlay" role="dialog" aria-modal="true" aria-labelledby="tutorialTitle">
     <div class="modal-content tutorial-modal-content">
-      <button id="tutorialClose" class="tutorial-close" type="button" aria-label="Close">×</button>
-      <div class="modal-title tutorial-title">HOW TO PLAY</div>
+      <button id="tutorialClose" class="tutorial-close" type="button" aria-label="Close tutorial">×</button>
+      <div class="modal-title tutorial-title" id="tutorialTitle">HOW TO PLAY</div>
 
       <!-- STEP 1: SEE THE LETTERS -->
       <div class="tutorial-step">
-        <div class="tutorial-step-label">1 <span class="tutorial-sep">·</span> SEE THE LETTERS</div>
+        <h2 class="tutorial-step-label">Step 1 · See the letters</h2>
         <p class="tutorial-step-text">Each round reveals a start letter and an end letter.</p>
-        <div class="tutorial-letter-pair">
+        <div class="tutorial-letter-pair" aria-hidden="true">
           <span class="tutorial-letter start">A</span>
           <span class="tutorial-letter-dots">· · ·</span>
           <span class="tutorial-letter end">T</span>
@@ -182,7 +205,7 @@
 
       <!-- STEP 2: BUILD A WORD -->
       <div class="tutorial-step">
-        <div class="tutorial-step-label">2 <span class="tutorial-sep">·</span> BUILD A WORD</div>
+        <h2 class="tutorial-step-label">Step 2 · Build a word</h2>
         <p class="tutorial-step-text">Type a real word that begins with A and ends with T.</p>
         <p class="tutorial-step-note">Uses a standard English dictionary. Common country &amp; culture words (american, french, arab) are accepted. Offensive terms, personal names, and places are not.</p>
         <div class="tutorial-typewriter" aria-hidden="true">
@@ -197,19 +220,19 @@
 
       <!-- STEP 3: SCORE POINTS -->
       <div class="tutorial-step">
-        <div class="tutorial-step-label">3 <span class="tutorial-sep">·</span> SCORE POINTS</div>
-        <p class="tutorial-step-text">Word length is your score — fastest submit grabs a bonus.</p>
-        <div class="tutorial-score">
+        <h2 class="tutorial-step-label">Step 3 · Score points</h2>
+        <p class="tutorial-step-text">Word length is your score — the fastest submit grabs a bonus point.</p>
+        <div class="tutorial-score" aria-hidden="true">
           <span class="score-pts">5</span>
           <span class="score-pts-label">PTS</span>
           <span class="score-plus">+</span>
-          <span class="score-bonus">1 <span class="score-bolt">⚡</span></span>
+          <span class="score-bonus">1 <span class="score-bolt" aria-hidden="true">⚡</span></span>
         </div>
       </div>
 
       <!-- STEP 4: RACE THE CLOCK -->
       <div class="tutorial-step">
-        <div class="tutorial-step-label">4 <span class="tutorial-sep">·</span> RACE THE CLOCK</div>
+        <h2 class="tutorial-step-label">Step 4 · Race the clock</h2>
         <p class="tutorial-step-text">10 rounds · 10 seconds each · highest total wins.</p>
         <div class="tutorial-countdown" aria-hidden="true">
            <span class="countdown-num" style="--i:0">3</span>
@@ -219,69 +242,82 @@
         </div>
       </div>
 
-      <button id="tutorialGotItBtn" class="arcade-btn arcade-btn-primary tutorial-got-it">GOT IT</button>
+      <button id="tutorialGotItBtn" class="arcade-btn arcade-btn-primary tutorial-got-it" type="button">GOT IT</button>
     </div>
   </div>
 
   <!-- ── PROFILE MODAL ───────────────────────────── -->
-  <div id="profileModal" class="modal-overlay">
+  <div id="profileModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
     <div class="modal-content profile-modal-content">
-      <div class="modal-title">PROFILE</div>
+      <div class="modal-title" id="profileTitle">PROFILE</div>
       <p class="modal-text">Choose your avatar</p>
-      <div id="profileEmojiGrid" class="emoji-grid">
-        <button class="emoji-option" data-emoji="diamond" style="color:var(--neon-cyan)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,2 22,12 12,22 2,12" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      <div id="profileEmojiGrid" class="emoji-grid" role="radiogroup" aria-label="Choose avatar">
+        <button class="emoji-option" data-emoji="diamond" type="button" role="radio" aria-checked="true" aria-label="Diamond avatar" style="color:var(--neon-cyan)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><polygon points="12,2 22,12 12,22 2,12" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="circle" style="color:var(--neon-green)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>
+        <button class="emoji-option" data-emoji="circle" type="button" role="radio" aria-checked="false" aria-label="Circle avatar" style="color:var(--neon-green)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="square" style="color:var(--neon-magenta)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><rect x="3" y="3" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"/><line x1="7" y1="7" x2="17" y2="17" stroke="currentColor" stroke-width="2"/><line x1="17" y1="7" x2="7" y2="17" stroke="currentColor" stroke-width="2"/></svg>
+        <button class="emoji-option" data-emoji="square" type="button" role="radio" aria-checked="false" aria-label="Square avatar" style="color:var(--neon-magenta)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><rect x="3" y="3" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"/><line x1="7" y1="7" x2="17" y2="17" stroke="currentColor" stroke-width="2"/><line x1="17" y1="7" x2="7" y2="17" stroke="currentColor" stroke-width="2"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="triangle" style="color:var(--neon-yellow)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,3 22,20 2,20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <button class="emoji-option" data-emoji="triangle" type="button" role="radio" aria-checked="false" aria-label="Triangle avatar" style="color:var(--neon-yellow)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><polygon points="12,3 22,20 2,20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="star" style="color:var(--neon-orange)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,2 15,9 23,9 16,14 18,22 12,17 6,22 8,14 1,9 9,9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <button class="emoji-option" data-emoji="star" type="button" role="radio" aria-checked="false" aria-label="Star avatar" style="color:var(--neon-orange)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><polygon points="12,2 15,9 23,9 16,14 18,22 12,17 6,22 8,14 1,9 9,9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="heart" style="color:#ff4488">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><path d="M12 22C12 22 2 14 2 8c0-3 2.5-5 5-5 1.5 0 3 1 4.5 2.5C13 4 14.5 3 16 3c2.5 0 5 2 5 5 0 6-9 14-9 14z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <button class="emoji-option" data-emoji="heart" type="button" role="radio" aria-checked="false" aria-label="Heart avatar" style="color:#ff4488">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><path d="M12 22C12 22 2 14 2 8c0-3 2.5-5 5-5 1.5 0 3 1 4.5 2.5C13 4 14.5 3 16 3c2.5 0 5 2 5 5 0 6-9 14-9 14z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="hexagon" style="color:var(--neon-cyan)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <button class="emoji-option" data-emoji="hexagon" type="button" role="radio" aria-checked="false" aria-label="Hexagon avatar" style="color:var(--neon-cyan)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="cross" style="color:var(--neon-green)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><rect x="9" y="4" width="6" height="16" rx="1.5" fill="currentColor"/><rect x="4" y="9" width="16" height="6" rx="1.5" fill="currentColor"/></svg>
+        <button class="emoji-option" data-emoji="cross" type="button" role="radio" aria-checked="false" aria-label="Cross avatar" style="color:var(--neon-green)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><rect x="9" y="4" width="6" height="16" rx="1.5" fill="currentColor"/><rect x="4" y="9" width="16" height="6" rx="1.5" fill="currentColor"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="eye" style="color:var(--neon-yellow)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
+        <button class="emoji-option" data-emoji="eye" type="button" role="radio" aria-checked="false" aria-label="Eye avatar" style="color:var(--neon-yellow)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="bolt" style="color:var(--neon-orange)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="13,2 3,13 10,13 8,22 19,10 12,10 15,2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <button class="emoji-option" data-emoji="bolt" type="button" role="radio" aria-checked="false" aria-label="Bolt avatar" style="color:var(--neon-orange)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><polygon points="13,2 3,13 10,13 8,22 19,10 12,10 15,2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="shield" style="color:#ff44ff">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><path d="M12 2L4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6L12 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <button class="emoji-option" data-emoji="shield" type="button" role="radio" aria-checked="false" aria-label="Shield avatar" style="color:#ff44ff">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><path d="M12 2L4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6L12 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
-        <button class="emoji-option" data-emoji="sparkle" style="color:var(--neon-cyan)">
-          <svg viewBox="0 0 24 24" class="avatar-icon"><polygon points="12,1 14,9 22,11 14,13 12,21 10,13 2,11 10,9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <button class="emoji-option" data-emoji="sparkle" type="button" role="radio" aria-checked="false" aria-label="Sparkle avatar" style="color:var(--neon-cyan)">
+          <svg viewBox="0 0 24 24" class="avatar-icon" aria-hidden="true"><polygon points="12,1 14,9 22,11 14,13 12,21 10,13 2,11 10,9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </button>
       </div>
-      <input id="profileNameInput" class="arcade-input" maxlength="20" placeholder="Your name">
+      <label class="form-label" for="profileNameInput">Display name</label>
+      <input id="profileNameInput" class="arcade-input" maxlength="20" placeholder="Your name" autocomplete="given-name" />
+
+      <fieldset class="comfort-mode-field">
+        <legend class="form-label">Comfort Mode</legend>
+        <label class="comfort-toggle-row">
+          <input type="checkbox" id="comfortToggle" />
+          <span class="comfort-toggle-content">
+            <span class="comfort-toggle-title">Reduce motion and enlarge UI</span>
+            <span class="comfort-toggle-hint">Larger text and tiles, disables shake/flash effects, keeps the game playable.</span>
+          </span>
+        </label>
+      </fieldset>
+
       <div class="modal-buttons">
-        <button id="cancelProfileBtn" class="arcade-btn arcade-btn-secondary">Cancel</button>
-        <button id="saveProfileBtn" class="arcade-btn arcade-btn-primary">Save</button>
+        <button id="cancelProfileBtn" class="arcade-btn arcade-btn-secondary" type="button">Cancel</button>
+        <button id="saveProfileBtn" class="arcade-btn arcade-btn-primary" type="button">Save</button>
       </div>
     </div>
   </div>
 
   <!-- ── CHALLENGE MODAL ────────────────────────────── -->
-  <div id="challengeModal" class="modal-overlay">
+  <div id="challengeModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="challengeModalTitle">
     <div class="modal-content challenge-modal-content">
       <div id="challengeModalTitle" class="modal-title challenge-title">CHALLENGE!</div>
       <p id="challengeModalMsg" class="modal-text"></p>
       <div id="challengeModalCats" class="challenge-modal-cats"></div>
       <div id="challengeModalBtns" class="challenge-buttons"></div>
-      <div id="challengeModalTimer" class="challenge-timer-bar" style="display:none;">
+      <div id="challengeModalTimer" class="challenge-timer-bar" style="display:none;" aria-hidden="true">
         <div class="challenge-timer-fill"></div>
       </div>
     </div>

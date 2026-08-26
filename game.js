@@ -11,8 +11,23 @@ const socket = io({
 
 // Re-authenticate on reconnect (server connection state recovery fallback)
 socket.on('connect', () => {
+  // On a recovered connection the server already restored our session
+  // (name, room, comfortMode) via roomStateRestored + nameConfirmed. Emitting
+  // setName again would trigger a second nameConfirmed that could eject us
+  // from the restored room/game view. Only fresh connections need setName.
+  if (socket.recovered) {
+    // Re-sync comfort mode preference for round timing
+    if (comfortPrefs.enabled) {
+      socket.emit('setComfortMode', { enabled: true });
+    }
+    return;
+  }
   if (myName) {
     socket.emit('setName', myName);
+  }
+  // Re-sync comfort mode preference for round timing
+  if (comfortPrefs.enabled) {
+    socket.emit('setComfortMode', { enabled: true });
   }
 });
 
@@ -35,21 +50,28 @@ let isHost = false;
 let players = [];           // all players in current room [{id,name,ready}]
 let roomHostId = null;
 let currentRound = 0;
+let totalRounds = 10;
 let roundDeadline = null;
+let currentRoundDuration = 10000; // ms, from server roundStart.timeLeft (authoritative)
 let currentStartLetter = null;
 let currentEndLetter = null;
 let timerInterval = null;
+let lastAnnouncedSecond = -1;
+let lastTimerAnnounceSecond = -1;
 let submitted = false;
+let restoredIntoRoom = false; // set when roomStateRestored re-places us in a room/game
+let _renamingViaProfile = false; // set while an editName round-trip is in flight
 let wordLookupClient = {};
 let wordCategoriesClient = {};
 let roomCategories = { noun_adj_verb: true, countries: true, us_states: true, us_cities: true };
 let autoJoinRoomCode = null;  // from URL param ?room=
+let roundScores = { me: 0, opp: 0 }; // live score feed for the always-visible hint
 
 const $ = id => document.getElementById(id);
 
 // Display order + labels for category toggles (used by renderCategoryToggles).
 const CATEGORY_LABELS = {
-  noun_adj_verb: 'noun / adj / verb',
+  noun_adj_verb: 'Nouns / adjectives / verbs',
   countries: 'Countries',
   us_states: 'US States',
   us_cities: 'US Cities'
@@ -99,26 +121,26 @@ function playSweep(startFreq, endFreq, duration, type = 'square') {
   } catch(e) {}
 }
 
-function sfxSubmit() { playBeep(600, 0.1); setTimeout(() => playBeep(900, 0.12), 80); }
-function sfxInvalid() { playSweep(300, 80, 0.2, 'sawtooth'); }
-function sfxTimerTick() { playBeep(1000, 0.04, 'square', 0.05); }
-function sfxRoundStart() { playBeep(400, 0.08); setTimeout(() => playBeep(600, 0.1), 70); setTimeout(() => playBeep(900, 0.14), 140); }
+function sfxSubmit() { if (comfortPrefs.motionOff) return; playBeep(600, 0.1); setTimeout(() => playBeep(900, 0.12), 80); }
+function sfxInvalid() { if (comfortPrefs.motionOff) return; playSweep(300, 80, 0.2, 'sawtooth'); }
+function sfxTimerTick() { if (comfortPrefs.motionOff) return; playBeep(1000, 0.04, 'square', 0.05); }
+function sfxRoundStart() { if (comfortPrefs.motionOff) return; playBeep(400, 0.08); setTimeout(() => playBeep(600, 0.1), 70); setTimeout(() => playBeep(900, 0.14), 140); }
 function sfxWin() {
+  if (comfortPrefs.motionOff) return;
   playBeep(523, 0.12); setTimeout(() => playBeep(659, 0.12), 100);
   setTimeout(() => playBeep(784, 0.12), 200); setTimeout(() => playBeep(1047, 0.3), 300);
 }
-function sfxLose() { playSweep(400, 100, 0.4, 'sawtooth'); }
-function sfxReady() { playBeep(700, 0.06); setTimeout(() => playBeep(1000, 0.08), 60); }
+function sfxLose() { if (comfortPrefs.motionOff) return; playSweep(400, 100, 0.4, 'sawtooth'); }
+function sfxReady() { if (comfortPrefs.motionOff) return; playBeep(700, 0.06); setTimeout(() => playBeep(1000, 0.08), 60); }
 
 // Tracks in-flight screen transition so overlapping calls don't stack animationend listeners
 let _pendingTransition = null;
 
 function showScreen(screenId, instant = false) {
-  // Cancel any in-flight transition before starting a new one
   if (_pendingTransition) {
     const { el, handler } = _pendingTransition;
     el.removeEventListener('animationend', handler);
-    handler();  // synchronously clean up the old transition
+    handler();
     _pendingTransition = null;
   }
 
@@ -145,13 +167,93 @@ function showScreen(screenId, instant = false) {
 
 // === Profile storage ===
 const STORAGE_PROFILE = 'wb_profile';
+const STORAGE_COMFORT = 'wb_comfort_mode';
 
 function loadProfile() {
   try { return JSON.parse(localStorage.getItem(STORAGE_PROFILE)); } catch(e) { return null; }
 }
-
 function saveProfile(profile) {
   localStorage.setItem(STORAGE_PROFILE, JSON.stringify(profile));
+}
+
+// === Comfort Mode ===
+// Mirrors the profile UI checkbox; defaults follow system preferences
+let comfortPrefs = {
+  enabled: false,        // master toggle — disables motion, increases text/tile scale
+  motionOff: false,      // derived: stop decorative animations
+  highContrast: false,   // derived: follow prefers-contrast
+  source: 'system'       // 'system' | 'user'
+};
+
+function loadComfortPrefs() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_COMFORT));
+    if (stored && typeof stored === 'object' && typeof stored.enabled === 'boolean') {
+      comfortPrefs.enabled = stored.enabled;
+      comfortPrefs.source = 'user';
+    }
+  } catch(e) {}
+  // Re-evaluate system values
+  const sysReduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sysContrast = window.matchMedia && window.matchMedia('(prefers-contrast: more)').matches;
+  comfortPrefs.motionOff = comfortPrefs.enabled || sysReduce;
+  comfortPrefs.highContrast = comfortPrefs.enabled || sysContrast;
+}
+
+function saveComfortPrefs() {
+  localStorage.setItem(STORAGE_COMFORT, JSON.stringify({ enabled: comfortPrefs.enabled }));
+}
+
+function applyComfortPrefs() {
+  document.body.classList.toggle('comfort-mode', comfortPrefs.enabled);
+  document.body.classList.toggle('high-contrast', comfortPrefs.highContrast);
+  document.body.classList.toggle('reduced-motion', comfortPrefs.motionOff);
+  const cb = $('comfortToggle');
+  if (cb) cb.checked = !!comfortPrefs.enabled;
+}
+
+function setComfortMode(enabled) {
+  comfortPrefs.enabled = !!enabled;
+  // When user explicitly toggles, follow their lead.
+  comfortPrefs.source = 'user';
+  const sysReduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sysContrast = window.matchMedia && window.matchMedia('(prefers-contrast: more)').matches;
+  comfortPrefs.motionOff = comfortPrefs.enabled || sysReduce;
+  comfortPrefs.highContrast = comfortPrefs.enabled || sysContrast;
+  applyComfortPrefs();
+  saveComfortPrefs();
+  // Sync preference with server so round timing adjusts (next round only)
+  socket.emit('setComfortMode', { enabled: !!enabled });
+}
+
+// React to system preference changes if user hasn't set their own
+function watchSystemComfortPrefs() {
+  if (!window.matchMedia) return;
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const contrast = window.matchMedia('(prefers-contrast: more)');
+  const onChange = () => {
+    if (comfortPrefs.source !== 'user') {
+      comfortPrefs.motionOff = reduce.matches;
+      comfortPrefs.highContrast = contrast.matches;
+      applyComfortPrefs();
+    } else {
+      // If user has an explicit pref, still honor system overrides for motion
+      comfortPrefs.motionOff = comfortPrefs.enabled || reduce.matches;
+      comfortPrefs.highContrast = comfortPrefs.enabled || contrast.matches;
+      applyComfortPrefs();
+    }
+  };
+  if (reduce.addEventListener) reduce.addEventListener('change', onChange);
+  if (contrast.addEventListener) contrast.addEventListener('change', onChange);
+}
+
+function announce(msg) {
+  const el = $('srAnnounce');
+  if (el) el.textContent = msg;
+}
+function announceAlert(msg) {
+  const el = $('srAlert');
+  if (el) el.textContent = msg;
 }
 
 function animateValue(el, start, end, duration) {
@@ -177,7 +279,21 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Attribute-safe escaping. escapeHtml() serializes TEXT content and does NOT
+// escape double quotes, so it is unsafe inside HTML attributes (e.g.
+// data-player-name, aria-label). Use escapeAttr whenever user-derived data is
+// interpolated into an attribute value.
+function escapeAttr(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function spawnConfetti(count) {
+  if (comfortPrefs.motionOff) return;
   const colors = ['var(--neon-green)', 'var(--neon-cyan)', 'var(--neon-magenta)', 'var(--neon-yellow)', 'var(--neon-orange)'];
   const container = document.body;
   const fragment = document.createDocumentFragment();
@@ -204,6 +320,11 @@ function spawnConfetti(count) {
 }
 
 function showRoundBanner(text) {
+  if (comfortPrefs.motionOff) {
+    // Skip purely decorative motion, still surface the same state info via announcement
+    announce(text);
+    return;
+  }
   const existing = document.querySelector('.round-banner');
   if (existing) existing.remove();
   const banner = document.createElement('div');
@@ -214,6 +335,7 @@ function showRoundBanner(text) {
 }
 
 function showFloatingReaction(emoji, x, y) {
+  if (comfortPrefs.motionOff) return;
   const el = document.createElement('div');
   el.className = 'floating-reaction';
   el.textContent = emoji;
@@ -229,9 +351,11 @@ function showToast(msg) {
   if (existing) existing.remove();
   const toast = document.createElement('div');
   toast.className = 'toast-notification';
+  toast.role = 'status';
   toast.textContent = msg;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 3000);
+  announceAlert(msg);
 }
 
 const AVATAR_SVGS = {
@@ -273,6 +397,7 @@ function showError(msg, elementId) {
   if (!el) return;
   el.textContent = msg;
   el.style.display = 'block';
+  announceAlert(msg);
   setTimeout(() => el.style.display = 'none', 3000);
 }
 
@@ -312,8 +437,6 @@ function validateClientWord(word, startLetter, endLetter) {
   const words = wordLookupClient[key];
   if (!words || !words.has(w)) return { valid: false, reason: 'Word not in dictionary' };
 
-  // Category check (only when at least one category is disabled).
-  // Reject words that don't match any enabled category, including untagged words.
   const hasDisabled = Object.values(roomCategories).some(v => v === false);
   if (hasDisabled) {
     const wordCats = wordCategoriesClient[w];
@@ -343,16 +466,16 @@ function updateOnlinePlayersList(list) {
     .map(p => `
       <div class="player-item">
         <div class="player-name">
-          <span class="status-dot status-${p.status === 'online' ? 'online' : 'busy'}"></span>
+          <span class="status-dot status-${p.status === 'online' ? 'online' : 'busy'}" aria-hidden="true"></span>
+          <span class="status-text sr-only">${p.status === 'online' ? 'Available' : 'In game'}</span>
           <span class="player-name-text">${escapeHtml(p.name)}</span>
         </div>
-        ${p.status !== 'online' ? '<span class="in-game-label">IN GAME</span>' :
-          `<button class="challenge-btn" data-player-id="${p.id}" data-player-name="${escapeHtml(p.name)}" title="Challenge to a game">⚔</button>`}
+        ${p.status !== 'online' ? '<span class="in-game-label">In game</span>' :
+          `<button class="challenge-btn" data-player-id="${p.id}" data-player-name="${escapeAttr(p.name)}" type="button" aria-label="Challenge ${escapeAttr(p.name)} to a game">⚔ Challenge</button>`}
       </div>
     `).join('');
 }
 
-// === Room lobby rendering ===
 function renderRoomLobby() {
   if (!myRoomCode) return;
 
@@ -366,43 +489,47 @@ function renderRoomLobby() {
   list.innerHTML = players.map(p => {
     const isYou = p.id === myPlayerId;
     const isRoomHost = p.id === roomHostId;
+    const readyLabel = p.ready ? 'Ready' : 'Not ready';
     return `
       <div class="player-item${p.ready ? ' ready' : ''}${isRoomHost ? ' host' : ''}">
         <div class="player-name">
-          <span class="player-name-text">${escapeHtml(p.name)}${isYou ? ' (YOU)' : ''}${isRoomHost ? '<span class="host-crown">👑</span>' : ''}</span>
+          <span class="player-name-text">${escapeHtml(p.name)}${isYou ? ' (you)' : ''}${isRoomHost ? '<span class="host-crown" aria-label="Host">Host</span>' : ''}${p.comfortMode ? '<span class="comfort-badge" aria-label="Comfort mode enabled">Comfort</span>' : ''}</span>
         </div>
-        <span class="ready-badge ${p.ready ? 'ready-on' : 'ready-off'}">${p.ready ? 'READY' : '...'}</span>
+        <span class="ready-badge ${p.ready ? 'ready-on' : 'ready-off'}" aria-label="${readyLabel}">${p.ready ? 'Ready' : 'Not ready'}</span>
       </div>
     `;
   }).join('');
 
   const readyCount = players.filter(p => p.ready).length;
-  $('roomReadyStatus').textContent = `${readyCount}/${players.length} ready`;
+  const status = $('roomReadyStatus');
+  status.textContent = `${readyCount} of ${players.length} ready`;
 
   // Ready Up button reflects own state
   const me = players.find(p => p.id === myPlayerId);
   const readyBtn = $('readyUpLobbyBtn');
   if (me && me.ready) {
     readyBtn.textContent = 'READY';
+    readyBtn.setAttribute('aria-pressed', 'true');
     readyBtn.disabled = true;
     readyBtn.classList.remove('pulsing');
   } else {
     readyBtn.textContent = 'READY UP';
+    readyBtn.setAttribute('aria-pressed', 'false');
     readyBtn.disabled = false;
     readyBtn.classList.add('pulsing');
   }
 
-  // Start Game button: host only, enabled when ≥2 players and all ready
+  // Start Game button
   const startBtn = $('startGameBtn');
   if (isHost) {
     startBtn.style.display = 'inline-block';
     const allReady = players.length >= 2 && players.every(p => p.ready);
     startBtn.disabled = !allReady;
+    startBtn.setAttribute('aria-disabled', String(!allReady));
   } else {
     startBtn.style.display = 'none';
   }
 
-  // Category toggles reflect current isHost + roomCategories state
   renderCategoryToggles();
 }
 
@@ -410,7 +537,6 @@ function copyToClipboard(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     return navigator.clipboard.writeText(text);
   }
-  // Fallback for older browsers / non-https
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.style.position = 'fixed';
@@ -423,16 +549,13 @@ function copyToClipboard(text) {
 }
 
 // === Category toggles (host-controlled) ===
-// Renders one button per category. Host can click to flip the state.
-// Non-host sees the same buttons but in a read-only (dimmed) state.
 function renderCategoryToggles() {
   const container = $('categoryTogglesRow');
   if (!container) return;
 
-  // Subtitle communicates who controls the toggles
   const subtitle = $('categoryTogglesSubtitle');
   if (subtitle) {
-    subtitle.textContent = isHost ? 'TAP TO TOGGLE' : 'HOST ONLY';
+    subtitle.textContent = isHost ? 'Tap to toggle' : 'Host only';
     subtitle.classList.toggle('host-mode', isHost);
     subtitle.classList.toggle('readonly-mode', !isHost);
   }
@@ -451,12 +574,10 @@ function renderCategoryToggles() {
               data-category="${cat}"
               role="${role}"
               ${role ? `aria-checked="${checked}"` : ''}
-              aria-label="${escapeHtml(label)} category${isHost ? '' : ' (host only)'}"
+              aria-label="${escapeAttr(label)} ${isOn ? 'on' : 'off'}${isHost ? '' : ' (host only, read only)'}"
               ${disabledAttrs}>
         <span class="category-label">${escapeHtml(label)}</span>
-        <span class="toggle-switch" aria-hidden="true">
-          <span class="toggle-knob"></span>
-        </span>
+        <span class="toggle-state" aria-hidden="true">${isOn ? 'On' : 'Off'}</span>
       </button>
     `;
   }).join('');
@@ -467,6 +588,9 @@ function resetRoomState() {
   isHost = false;
   players = [];
   roomHostId = null;
+  restoredIntoRoom = false;
+  roundScores = { me: 0, opp: 0 };
+  updateScoreHint();
 }
 
 // === Reaction emoji system ===
@@ -488,14 +612,12 @@ socket.on('reactionReceived', (data) => {
 });
 
 // === Challenge system ===
-let pendingChallenge = null; // { challengerId, challengerName, targetId, targetName, categories, mode: 'send'|'receive' }
+let pendingChallenge = null;
 let challengeTimerInterval = null;
 
-// Default challenge categories (matches room defaults)
 const DEFAULT_CHALLENGE_CATEGORIES = { noun_adj_verb: true, countries: true, us_states: true, us_cities: true };
 let challengeCategories = { ...DEFAULT_CHALLENGE_CATEGORIES };
 
-// Challenge button click delegation — opens send modal
 $('onlinePlayers').addEventListener('click', (e) => {
   const btn = e.target.closest('.challenge-btn');
   if (!btn) return;
@@ -505,8 +627,6 @@ $('onlinePlayers').addEventListener('click', (e) => {
   openChallengeSendModal(targetId, targetName);
 });
 
-// ── Challenge Modal Rendering ──
-
 function openChallengeSendModal(targetId, targetName) {
   challengeCategories = { ...DEFAULT_CHALLENGE_CATEGORIES };
 
@@ -515,19 +635,15 @@ function openChallengeSendModal(targetId, targetName) {
   $('challengeModalTitle').textContent = 'CHALLENGE';
   $('challengeModalMsg').textContent = `Challenge ${targetName} to a game?`;
 
-  // Render category toggles
   renderChallengeCategoryToggles();
 
-  // Buttons
   $('challengeModalBtns').innerHTML = `
-    <button id="sendChallengeBtn" class="arcade-btn arcade-btn-primary">CHALLENGE</button>
-    <button id="cancelSendChallengeBtn" class="arcade-btn arcade-btn-secondary">CANCEL</button>
+    <button id="sendChallengeBtn" class="arcade-btn arcade-btn-primary" type="button">Challenge</button>
+    <button id="cancelSendChallengeBtn" class="arcade-btn arcade-btn-secondary" type="button">Cancel</button>
   `;
 
-  // Hide timer
   $('challengeModalTimer').style.display = 'none';
 
-  // Attach button handlers
   $('sendChallengeBtn').addEventListener('click', () => {
     socket.emit('challengePlayer', { targetId, categories: challengeCategories });
     closeChallengeModal();
@@ -542,21 +658,17 @@ function openChallengeSendModal(targetId, targetName) {
 function openChallengeReceiveModal(challengerId, challengerName, categories) {
   pendingChallenge = { challengerId, challengerName, categories, mode: 'receive' };
 
-  $('challengeModalTitle').textContent = 'CHALLENGE!';
+  $('challengeModalTitle').textContent = 'CHALLENGE';
   $('challengeModalMsg').textContent = `${challengerName} challenges you to a game!`;
 
-  // Render categories as read-only tags
   renderChallengeReceiveCategories(categories);
 
-  // Buttons
   $('challengeModalBtns').innerHTML = `
-    <button id="acceptChallengeBtn" class="arcade-btn arcade-btn-primary">ACCEPT</button>
-    <button id="declineChallengeBtn" class="arcade-btn arcade-btn-secondary">DECLINE</button>
+    <button id="acceptChallengeBtn" class="arcade-btn arcade-btn-primary" type="button">Accept</button>
+    <button id="declineChallengeBtn" class="arcade-btn arcade-btn-secondary" type="button">Decline</button>
   `;
 
-  // Show timer
   $('challengeModalTimer').style.display = 'block';
-  // Restart timer bar animation
   const fill = $('challengeModalTimer').querySelector('.challenge-timer-fill');
   if (fill) {
     fill.style.animation = 'none';
@@ -564,7 +676,6 @@ function openChallengeReceiveModal(challengerId, challengerName, categories) {
     fill.style.animation = '';
   }
 
-  // Attach button handlers
   $('acceptChallengeBtn').addEventListener('click', () => {
     if (!pendingChallenge) return;
     socket.emit('acceptChallenge', pendingChallenge.challengerId);
@@ -583,27 +694,29 @@ function openChallengeReceiveModal(challengerId, challengerName, categories) {
 function renderChallengeCategoryToggles() {
   const container = $('challengeModalCats');
   container.innerHTML = `
-    <div class="challenge-cats-label">WORD CATEGORIES</div>
+    <div class="challenge-cats-label">Word categories</div>
     <div class="challenge-cats-grid">
       ${CATEGORY_ORDER.map(cat => {
         const isOn = challengeCategories[cat];
         const label = CATEGORY_LABELS[cat] || cat;
         return `
-          <button type="button" class="category-toggle-sm ${isOn ? 'active' : 'inactive'}" data-cat="${cat}">
-            <span class="cat-label-sm">${escapeHtml(label)}</span>
+          <button type="button" class="category-toggle-sm ${isOn ? 'active' : 'inactive'}" data-cat="${cat}" aria-pressed="${isOn}">
+            <span class="cat-label-sm">${escapeHtml(label)}: ${isOn ? 'on' : 'off'}</span>
           </button>
         `;
       }).join('')}
     </div>
   `;
 
-  // Attach toggle handlers
   container.querySelectorAll('.category-toggle-sm').forEach(btn => {
     btn.addEventListener('click', () => {
       const cat = btn.dataset.cat;
       challengeCategories[cat] = !challengeCategories[cat];
       btn.classList.toggle('active', challengeCategories[cat]);
       btn.classList.toggle('inactive', !challengeCategories[cat]);
+      btn.setAttribute('aria-pressed', String(challengeCategories[cat]));
+      const lbl = btn.querySelector('.cat-label-sm');
+      if (lbl) lbl.textContent = `${CATEGORY_LABELS[cat] || cat}: ${challengeCategories[cat] ? 'on' : 'off'}`;
     });
   });
 }
@@ -616,20 +729,17 @@ function renderChallengeReceiveCategories(categories) {
   const offList = CATEGORY_ORDER.filter(cat => !categories[cat]);
 
   if (catList.length === CATEGORY_ORDER.length) {
-    // All on — show nothing or a brief message
-    container.innerHTML = '<span class="challenge-cats-all">All categories</span>';
+    container.innerHTML = '<span class="challenge-cats-all">All categories enabled</span>';
   } else {
     container.innerHTML = catList.map(cat => {
       const label = CATEGORY_LABELS[cat] || cat;
-      return `<span class="challenge-cat-tag active">${escapeHtml(label)}</span>`;
+      return `<span class="challenge-cat-tag active">${escapeHtml(label)} on</span>`;
     }).join('') + offList.map(cat => {
       const label = CATEGORY_LABELS[cat] || cat;
-      return `<span class="challenge-cat-tag inactive">${escapeHtml(label)}</span>`;
+      return `<span class="challenge-cat-tag inactive">${escapeHtml(label)} off</span>`;
     }).join('');
   }
 }
-
-// ── Modal lifecycle ──
 
 function closeChallengeModal() {
   $('challengeModal').classList.remove('active');
@@ -644,7 +754,6 @@ function clearChallengeState() {
   }
 }
 
-// Backdrop click — close modal
 $('challengeModal').addEventListener('click', (e) => {
   if (e.target === $('challengeModal')) {
     if (pendingChallenge && pendingChallenge.mode === 'receive') {
@@ -654,12 +763,12 @@ $('challengeModal').addEventListener('click', (e) => {
   }
 });
 
-// ── Challenge socket events ──
-
 socket.on('challengeReceived', (data) => {
   openChallengeReceiveModal(data.challengerId, data.challengerName, data.categories);
-  playBeep(800, 0.06);
-  setTimeout(() => playBeep(1000, 0.08), 60);
+  if (!comfortPrefs.motionOff) {
+    playBeep(800, 0.06);
+    setTimeout(() => playBeep(1000, 0.08), 60);
+  }
 });
 
 socket.on('challengeSent', (data) => {
@@ -673,7 +782,6 @@ socket.on('challengeAccepted', (data) => {
   isHost = (data.hostId === myPlayerId);
   players = (data.players || []).map(p => ({ ...p }));
   roomCategories = data.categories || { ...roomCategories };
-  // roundStart will follow shortly to show game screen
 });
 
 socket.on('challengeDeclined', (data) => {
@@ -762,7 +870,6 @@ $('joinRoomInput').addEventListener('keydown', (e) => {
 
 $('readyUpLobbyBtn').addEventListener('click', () => {
   sfxReady();
-  // One-way ready — disable button to prevent double-ready
   const me = players.find(p => p.id === myPlayerId);
   if (me && !me.ready) {
     me.ready = true;
@@ -775,8 +882,7 @@ $('startGameBtn').addEventListener('click', () => {
   socket.emit('startGame');
 });
 
-// Category toggle click handler — uses event delegation on the stable row container.
-// Only the host can flip state; non-hosts are blocked here too as a safety net.
+// Category toggle click handler
 $('categoryTogglesRow').addEventListener('click', (e) => {
   const btn = e.target.closest('.category-toggle');
   if (!btn) return;
@@ -794,14 +900,14 @@ $('leaveRoomLobbyBtn').addEventListener('click', () => {
 
 $('copyRoomCodeBtn').addEventListener('click', () => {
   if (myRoomCode) {
-    copyToClipboard(myRoomCode).then(() => showToast('Room code copied!'));
+    copyToClipboard(myRoomCode).then(() => showToast('Room code copied to clipboard'));
   }
 });
 
 $('copyInviteLinkBtn').addEventListener('click', () => {
   if (myRoomCode) {
     const link = window.location.origin + '/?room=' + myRoomCode;
-    copyToClipboard(link).then(() => showToast('Invite link copied!'));
+    copyToClipboard(link).then(() => showToast('Invite link copied to clipboard'));
   }
 });
 
@@ -815,9 +921,10 @@ $('wordInput').addEventListener('keydown', (e) => {
         sfxInvalid();
         $('wordInput').classList.add('invalid-input');
         $('wordInput').placeholder = result.reason;
+        announceAlert(result.reason);
         setTimeout(() => {
           $('wordInput').classList.remove('invalid-input');
-          $('wordInput').placeholder = 'Type a word...';
+          $('wordInput').placeholder = 'TYPE A WORD...';
         }, 1000);
         return;
       }
@@ -826,13 +933,16 @@ $('wordInput').addEventListener('keydown', (e) => {
       $('wordInput').disabled = true;
       $('wordInput').classList.add('submitted-flash');
       setTimeout(() => $('wordInput').classList.remove('submitted-flash'), 600);
-      $('tile1').classList.add('glow-burst');
-      $('tile2').classList.add('glow-burst');
-      setTimeout(() => {
-        $('tile1').classList.remove('glow-burst');
-        $('tile2').classList.remove('glow-burst');
-      }, 600);
+      if (!comfortPrefs.motionOff) {
+        $('tile1').classList.add('glow-burst');
+        $('tile2').classList.add('glow-burst');
+        setTimeout(() => {
+          $('tile1').classList.remove('glow-burst');
+          $('tile2').classList.remove('glow-burst');
+        }, 600);
+      }
       socket.emit('submitWord', word);
+      announce(`Word submitted: ${word}. Waiting for round to end.`);
     }
   }
 });
@@ -856,13 +966,21 @@ $('returnToLobbyBtn').addEventListener('click', () => {
 function openProfileModal() {
   const profile = loadProfile();
   $('profileNameInput').value = profile ? profile.name || '' : '';
+  const savedEmoji = profile ? profile.emoji : 'diamond';
   document.querySelectorAll('.emoji-option').forEach(btn => {
-    btn.classList.remove('selected');
-    if (profile && btn.dataset.emoji === profile.emoji) {
-      btn.classList.add('selected');
-    }
+    const isSelected = btn.dataset.emoji === savedEmoji;
+    btn.classList.toggle('selected', isSelected);
+    btn.setAttribute('aria-checked', String(isSelected));
   });
+  // Sync comfort toggle with current preference
+  const cb = $('comfortToggle');
+  if (cb) cb.checked = !!comfortPrefs.enabled;
   $('profileModal').classList.add('active');
+  // Focus first interactive element for keyboard users
+  setTimeout(() => {
+    const first = $('profileModal').querySelector('button, input, [tabindex]');
+    if (first) first.focus({ preventScroll: true });
+  }, 50);
 }
 
 function closeProfileModal() {
@@ -893,30 +1011,51 @@ function closeTutorialModal() {
 }
 
 $('howToPlayBtn').addEventListener('click', openTutorialModal);
-$('tutorialClose').addEventListener('click', closeTutorialModal);
-$('tutorialGotItBtn').addEventListener('click', closeTutorialModal);
+const tutorialCloseBtn = $('tutorialClose');
+if (tutorialCloseBtn) tutorialCloseBtn.addEventListener('click', closeTutorialModal);
 
-// Close when clicking the backdrop (outside the card).
-// stopPropagation on the card itself prevents backdrop click-through.
+const tutorialGotItBtn = $('tutorialGotItBtn');
+if (tutorialGotItBtn) tutorialGotItBtn.addEventListener('click', closeTutorialModal);
+
 const tutorialCard = document.querySelector('.tutorial-modal-content');
 if (tutorialCard) {
   tutorialCard.addEventListener('click', (e) => e.stopPropagation());
 }
-$('tutorialModal').addEventListener('click', (e) => {
-  if (e.target === $('tutorialModal')) closeTutorialModal();
-});
+
+const tutorialModalEl = $('tutorialModal');
+if (tutorialModalEl) {
+  tutorialModalEl.addEventListener('click', (e) => {
+    if (e.target === tutorialModalEl) closeTutorialModal();
+  });
+}
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && $('tutorialModal').classList.contains('active')) {
-    closeTutorialModal();
+  if (e.key === 'Escape') {
+    if ($('tutorialModal').classList.contains('active')) closeTutorialModal();
+    if ($('profileModal').classList.contains('active')) closeProfileModal();
+    if ($('challengeModal').classList.contains('active')) {
+      if (pendingChallenge && pendingChallenge.mode === 'receive') {
+        socket.emit('declineChallenge', pendingChallenge.challengerId);
+      }
+      closeChallengeModal();
+    }
   }
 });
 
 document.querySelectorAll('.emoji-option').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.emoji-option').forEach(b => b.classList.remove('selected'));
+    document.querySelectorAll('.emoji-option').forEach(b => {
+      b.classList.remove('selected');
+      b.setAttribute('aria-checked', 'false');
+    });
     btn.classList.add('selected');
+    btn.setAttribute('aria-checked', 'true');
   });
+});
+
+// Comfort toggle wiring
+$('comfortToggle').addEventListener('change', (e) => {
+  setComfortMode(e.target.checked);
 });
 
 $('saveProfileBtn').addEventListener('click', () => {
@@ -934,28 +1073,75 @@ $('saveProfileBtn').addEventListener('click', () => {
       $('profileIndicatorName').textContent = name;
       indicator.style.display = 'flex';
     }
+    // Sync the updated name with the server so subsequent room/challenge
+    // actions use it (the server holds the authoritative name in onlinePlayers).
+    // Only when we've already entered the lobby — the server has a profile row.
+    if (myPlayerId) {
+      _renamingViaProfile = true;
+      socket.emit('editName', name);
+    }
+    showToast('Profile saved');
   }
+  // Comfort Mode is already persisted via change handler; close modal regardless
   closeProfileModal();
 });
 
-// === Socket event handlers ===
+// === Always-visible score hint ===
+function updateScoreHint() {
+  const me = $('scoreHintYou');
+  const opp = $('scoreHintOpp');
+  if (me) me.textContent = roundScores.me;
+  if (opp) opp.textContent = roundScores.opp;
+}
+updateScoreHint();
 
+// === Round / game events ===
 socket.on('nameConfirmed', (data) => {
   myPlayerId = data.playerId;
   myName = data.name;
 
-  // Save name to profile (preserve existing emoji if set)
+  // Sync comfort mode preference with server for round timing
+  if (comfortPrefs.enabled) {
+    socket.emit('setComfortMode', { enabled: true });
+  }
+
   const existingProfile = loadProfile();
   saveProfile({
     name: myName,
     emoji: existingProfile ? existingProfile.emoji : 'diamond'
   });
 
-  // Auto-join if URL had ?room=code — skip lobby, go straight to room
+  // Profile renames also arrive as nameConfirmed (editName). This is a
+  // background name sync — never redirect screens for it.
+  if (_renamingViaProfile) {
+    _renamingViaProfile = false;
+    const me = players.find(p => p.id === myPlayerId);
+    if (me) {
+      me.name = myName;
+      if (myRoomCode) renderRoomLobby();
+    }
+    return;
+  }
+
+  // Recovery safety: roomStateRestored has already re-placed us into an
+  // existing room/game/result view. Do NOT eject back to the lobby.
+  if (restoredIntoRoom) {
+    restoredIntoRoom = false;
+    const me = players.find(p => p.id === myPlayerId);
+    if (me && me.name !== myName) {
+      me.name = myName;
+      renderRoomLobby();
+    }
+    return;
+  }
+
   if (autoJoinRoomCode && myName) {
     socket.emit('joinRoom', { code: autoJoinRoomCode, name: myName });
     autoJoinRoomCode = null;
   } else {
+    // Clear any stale room reference left over from a disconnect whose room no
+    // longer exists before returning to the lobby.
+    if (myRoomCode) resetRoomState();
     showScreen('lobbyScreen');
     socket.emit('requestOnlinePlayers');
   }
@@ -966,7 +1152,6 @@ socket.on('onlinePlayers', (players) => {
 });
 
 socket.on('error', (data) => {
-  // If the server rejected our word due to category mismatch, re-enable input
   if (data.code === 'category_mismatch' && submitted) {
     submitted = false;
     $('wordInput').disabled = false;
@@ -975,12 +1160,12 @@ socket.on('error', (data) => {
     $('wordInput').select();
   }
 
-  // Show on whichever error element is currently visible/active
   const lobbyErr = $('lobbyError');
   const nameErr = $('nameError');
-  if (lobbyErr && lobbyErr.offsetParent !== null) {
+  const visible = (el) => el && (el.offsetParent !== null || el.style.display === 'block');
+  if (visible(lobbyErr)) {
     showError(data.message, 'lobbyError');
-  } else if (nameErr && nameErr.offsetParent !== null) {
+  } else if (visible(nameErr)) {
     showError(data.message, 'nameError');
   } else {
     showToast(data.message);
@@ -1008,15 +1193,14 @@ socket.on('roomJoined', (data) => {
   showScreen('roomLobbyScreen');
 });
 
-// Reconnection: server restores room state after recovery
 socket.on('roomStateRestored', (data) => {
+  restoredIntoRoom = true;
   myRoomCode = data.code;
   roomHostId = data.hostId;
   isHost = (data.hostId === myPlayerId);
   players = (data.players || []).map(p => ({ ...p }));
   roomCategories = data.categories || { ...roomCategories };
   renderRoomLobby();
-  // Navigate to correct screen based on room state
   if (data.state === 'lobby') {
     showScreen('roomLobbyScreen', true);
   }
@@ -1030,15 +1214,17 @@ socket.on('playerJoined', (data) => {
   renderRoomLobby();
 });
 
-// Disconnect banner: opponent disconnected mid-game
+// Disconnect banner
 let _disconnectBanner = null;
 function _showDisconnectBanner(playerName) {
   _hideDisconnectBanner();
   const banner = document.createElement('div');
   banner.id = 'disconnectBanner';
   banner.className = 'disconnect-banner';
-  banner.innerHTML = `<span class="disconnect-banner-icon">!</span> ${escapeHtml(playerName || 'Opponent')} disconnected. Waiting to reconnect&hellip;`;
+  banner.setAttribute('role', 'alert');
+  banner.innerHTML = `<span class="disconnect-banner-icon" aria-hidden="true">!</span><span>${escapeHtml(playerName || 'Opponent')} disconnected. Waiting to reconnect.</span>`;
   document.body.appendChild(banner);
+  announceAlert(`${playerName || 'Opponent'} disconnected`);
 }
 function _hideDisconnectBanner() {
   const el = document.getElementById('disconnectBanner');
@@ -1050,9 +1236,15 @@ socket.on('opponentDisconnected', (data) => {
   _showDisconnectBanner(data.playerName || 'Opponent');
 });
 
-// Reconnection: another player rejoined the room
 socket.on('playerRejoined', (data) => {
   _hideDisconnectBanner();
+  players = (data.players || []).map(p => ({ ...p }));
+  roomHostId = data.hostId;
+  isHost = (roomHostId === myPlayerId);
+  renderRoomLobby();
+});
+
+socket.on('playerUpdated', (data) => {
   players = (data.players || []).map(p => ({ ...p }));
   roomHostId = data.hostId;
   isHost = (roomHostId === myPlayerId);
@@ -1070,12 +1262,9 @@ socket.on('playerLobbyReady', (data) => {
 socket.on('playerLeft', (data) => {
   players = (data.players || []).map(p => ({ ...p }));
   roomHostId = data.hostId;
-  // If host changed and I am the new host, update flag
   isHost = (roomHostId === myPlayerId);
 
-  // Check if I'm still in the room
   if (!players.find(p => p.id === myPlayerId)) {
-    // I was removed - go to lobby
     _hideDisconnectBanner();
     resetRoomState();
     showScreen('lobbyScreen');
@@ -1083,7 +1272,6 @@ socket.on('playerLeft', (data) => {
     return;
   }
 
-  // If game is in progress and a player left, show toast
   const gameScreen = $('gameScreen');
   const resultScreen = $('resultScreen');
   const endScreen = $('endScreen');
@@ -1103,16 +1291,24 @@ socket.on('roomLeft', () => {
   socket.emit('requestOnlinePlayers');
 });
 
-// === Round / game events ===
 socket.on('roundStart', (data) => {
   currentRound = data.round;
+  totalRounds = data.totalRounds || 10;
   roundDeadline = data.deadline;
   currentStartLetter = data.startLetter;
   currentEndLetter = data.endLetter;
+  // Authoritative round duration from the server (defaults to 10s for
+  // safety, but comfort rooms send 15s).
+  const roundSeconds = Number(data.timeLeft) || 10;
+  currentRoundDuration = roundSeconds * 1000;
   submitted = false;
+  // Reset live scores for the new game (only on first round)
+  if (data.round === 1) {
+    roundScores = { me: 0, opp: 0 };
+  }
 
   $('currentRound').textContent = data.round;
-  if ($('totalRounds')) $('totalRounds').textContent = data.totalRounds || 10;
+  $('totalRounds').textContent = totalRounds;
   if ($('gameRoomCode')) $('gameRoomCode').textContent = myRoomCode || '';
   $('tile1').textContent = data.startLetter;
   $('tile2').textContent = data.endLetter;
@@ -1121,29 +1317,39 @@ socket.on('roundStart', (data) => {
   void $('tile1').offsetWidth;
   $('tile1').classList.add('bounce-in');
   $('tile2').classList.add('bounce-in');
+
+  const pairAnnounce = $('tilePairAnnounce');
+  if (pairAnnounce) pairAnnounce.textContent = `Start letter ${data.startLetter}, end letter ${data.endLetter}`;
+
   $('wordInput').value = '';
   $('wordInput').disabled = false;
   $('wordInput').classList.remove('invalid-input');
   $('wordInput').placeholder = 'TYPE A WORD...';
   $('wordInput').focus();
   $('submissionsStatus').innerHTML = '';
+  updateScoreHint();
 
   showScreen('gameScreen');
   showRoundBanner('ROUND ' + data.round);
   sfxRoundStart();
+  // Polite live-region announcement for screen readers
+  announce(`Round ${data.round} of ${totalRounds}. Type a word starting with ${data.startLetter} ending with ${data.endLetter}. ${roundSeconds} seconds.`);
   startTimer();
 });
 
 socket.on('playerSubmitted', (data) => {
-  if (data.playerId === myPlayerId) return; // don't show own submission
+  if (data.playerId === myPlayerId) return;
   const container = $('submissionsStatus');
   if (!container) return;
   if (container.querySelector(`[data-pid="${data.playerId}"]`)) return;
   const el = document.createElement('div');
   el.className = 'submission-item';
   el.dataset.pid = data.playerId;
+  el.setAttribute('aria-label', `${data.playerName} submitted`);
   el.textContent = data.playerName;
   container.appendChild(el);
+  // Update opponent-side score for the hint (server authoritative on totals in roundEnd)
+  announceAlert(`${data.playerName} submitted a word`);
 });
 
 socket.on('roundEnd', (data) => {
@@ -1154,7 +1360,6 @@ socket.on('roundEnd', (data) => {
 
   $('resultRound').textContent = data.round;
 
-  // Determine round winner(s) by highest points (among valid submissions)
   const validResults = data.results.filter(r => r.isValid);
   let topPoints = -1;
   let roundWinnerIds = [];
@@ -1167,22 +1372,34 @@ socket.on('roundEnd', (data) => {
     }
   });
   const hasSingleWinner = roundWinnerIds.length === 1;
+  const meResult = data.results.find(r => r.playerId === myPlayerId);
+  if (meResult) roundScores.me = meResult.totalScore;
+  const oppTotal = data.results
+    .filter(r => r.playerId !== myPlayerId)
+    .reduce((sum, r) => sum + (r.totalScore || 0), 0);
+  roundScores.opp = oppTotal;
+  updateScoreHint();
 
-  // Result cards - one per player
+  // Result cards — every result carries explicit status text, not color-only
   const resultsHTML = data.results.map((r, i) => {
-    const isWinner = roundWinnerIds.includes(r.playerId);
+    const isWinner = hasSingleWinner && roundWinnerIds.includes(r.playerId);
+    const isYou = r.playerId === myPlayerId;
+    const wordDisplay = r.word
+      ? escapeHtml(r.word)
+      : '<span class="result-empty">(no submission)</span>';
     return `
       <div class="result-card${isWinner ? ' winner-card' : ''}" style="animation-delay: ${i * 0.1}s">
         <div class="result-header">
-          <span class="result-player" style="color: ${r.playerId === myPlayerId ? 'var(--neon-green)' : 'var(--neon-magenta)'}">
-            ${isWinner && hasSingleWinner ? '👑 ' : ''}${r.playerId === myPlayerId ? 'YOU' : escapeHtml(r.name)}
+          <span class="result-player">
+            ${isWinner ? '<span class="winner-tag">Winner</span>' : ''}
+            ${isYou ? 'You' : escapeHtml(r.name)}
           </span>
-          <span class="result-points">+${r.points} PTS</span>
+          <span class="result-points">+${r.points} pts</span>
         </div>
-        <div class="result-word">${r.word ? escapeHtml(r.word) : '(no word)'}</div>
+        <div class="result-word">${wordDisplay}</div>
         <div class="result-meta">
-          ${r.isValid ? `GOT IT IN ${r.timeTaken.toFixed(1)}S` : 'INVALID WORD'}
-          ${r.bonus ? ' <span class="bonus">(+1 SPEED BONUS)</span>' : ''}
+          ${r.isValid ? `Submitted in ${r.timeTaken.toFixed(1)} seconds` : 'Invalid word'}
+          ${r.bonus ? ' <span class="bonus">+1 speed bonus</span>' : ''}
         </div>
       </div>
     `;
@@ -1190,17 +1407,15 @@ socket.on('roundEnd', (data) => {
 
   $('resultCards').innerHTML = resultsHTML;
 
-  // Examples
   if (data.examples && data.examples.length > 0) {
     $('examplesContainer').innerHTML = `
-      <p class="examples-label">VALID WORDS FOR ${data.pair[0]}...${data.pair[1]}:</p>
+      <p class="examples-label">Other valid words for ${data.pair[0]}…${data.pair[1]}</p>
       <p class="examples-words">${data.examples.map(e => escapeHtml(e)).join(', ')}</p>
     `;
   } else {
     $('examplesContainer').innerHTML = '';
   }
 
-  // Bar chart - all players
   const scores = data.results.map(r => ({
     name: r.name,
     score: r.totalScore,
@@ -1216,17 +1431,16 @@ socket.on('roundEnd', (data) => {
     return `
       <div class="bar-row${s.isWinner ? ' round-winner' : ''}">
         <div class="bar-player">
-          <span class="bar-name" style="color: ${color}">${s.isMe ? 'YOU' : escapeHtml(s.name)}</span>
+          <span class="bar-name" style="color: ${color}">${s.isMe ? 'You' : escapeHtml(s.name)}</span>
         </div>
         <div class="bar-track">
-          <div class="bar-fill" data-target-width="${pct}" style="width: 0%; background: ${color}; box-shadow: inset 0 0 10px ${color}, 0 0 8px ${color};"></div>
+          <div class="bar-fill ${s.isMe ? 'you-bar' : 'opp-bar'}" data-target-width="${pct}" style="width: 0%; background: ${color}; box-shadow: inset 0 0 10px ${color}, 0 0 8px ${color};"></div>
         </div>
-        <span class="bar-score" data-target-score="${s.score}" style="color: ${color};">0</span>
+        <span class="bar-score ${s.isMe ? 'you-score' : 'opp-score'}" data-target-score="${s.score}" style="color: ${color};">0</span>
       </div>
     `;
   }).join('');
 
-  // Animate bars and scores
   setTimeout(() => {
     document.querySelectorAll('#resultScores .bar-fill').forEach(bar => {
       bar.style.width = bar.dataset.targetWidth + '%';
@@ -1237,8 +1451,6 @@ socket.on('roundEnd', (data) => {
     });
   }, 100);
 
-  // No ready button between rounds - server auto-advances after pause
-  // Restart the auto-advance indicator animation by toggling it off→on
   const advFill = document.querySelector('#autoAdvanceIndicator .auto-advance-fill');
   if (advFill) {
     advFill.style.animation = 'none';
@@ -1253,6 +1465,15 @@ socket.on('roundEnd', (data) => {
   }
 
   showScreen('resultScreen');
+
+  // Build an accessible summary of the round
+  const meLine = meResult
+    ? (meResult.isValid ? `You scored ${meResult.points} points with "${meResult.word}". Your total is ${meResult.totalScore}.` : `Your word was invalid. Your total stays at ${meResult.totalScore}.`)
+    : '';
+  const winnerLine = hasSingleWinner && roundWinnerIds.length
+    ? (roundWinnerIds[0] === myPlayerId ? 'You won this round.' : `${escapeHtml((data.results.find(r => r.playerId === roundWinnerIds[0]) || {}).name || 'Someone')} won this round.`)
+    : (roundWinnerIds.length > 1 ? 'This round was a tie.' : '');
+  announce(`Round ${data.round} results. ${winnerLine} ${meLine}`);
 });
 
 socket.on('gameEnd', (data) => {
@@ -1262,41 +1483,43 @@ socket.on('gameEnd', (data) => {
   $('gameScreen').classList.remove('screen-critical');
   document.body.classList.remove('timer-critical');
 
-  // Rankings list - sort by score descending
   const sortedRankings = [...(data.rankings || [])].sort((a, b) => b.score - a.score);
 
   const rankingsHTML = sortedRankings.map((r, i) => {
     const isMe = r.id === myPlayerId;
-    const rankClass = i === 0 ? 'rank-gold' : (i === 1 ? 'rank-silver' : (i === 2 ? 'rank-bronze' : 'rank-default'));
-    const place = i === 0 ? '1ST' : (i === 1 ? '2ND' : (i === 2 ? '3RD' : `${i + 1}TH`));
+    let rankClass, place, placeLabel;
+    if (i === 0) { rankClass = 'rank-gold'; place = '1st'; placeLabel = '1st place'; }
+    else if (i === 1) { rankClass = 'rank-silver'; place = '2nd'; placeLabel = '2nd place'; }
+    else if (i === 2) { rankClass = 'rank-bronze'; place = '3rd'; placeLabel = '3rd place'; }
+    else { rankClass = 'rank-default'; place = `${i + 1}th`; placeLabel = `${i + 1}th place`; }
     return `
-      <div class="ranking-row ${rankClass}${isMe ? ' me' : ''}">
-        <span class="rank-place">${place}</span>
-        <span class="rank-name">${escapeHtml(r.name)}${isMe ? ' (YOU)' : ''}</span>
-        <span class="rank-score">${r.score}</span>
+      <div class="ranking-row ${rankClass}${isMe ? ' me' : ''}" role="listitem">
+        <span class="rank-place" aria-label="${placeLabel}">${place}</span>
+        <span class="rank-name">${escapeHtml(r.name)}${isMe ? ' (you)' : ''}</span>
+        <span class="rank-score" aria-label="${r.score} points">${r.score} pts</span>
       </div>
     `;
   }).join('');
 
   $('finalRankings').innerHTML = rankingsHTML;
+  $('finalRankings').setAttribute('role', 'list');
 
-  // Winner display
   const winDisplay = $('winnerDisplay');
   winDisplay.classList.remove('win');
   winDisplay.classList.remove('tie');
   winDisplay.style.color = '';
 
   if (data.isTie) {
-    winDisplay.textContent = 'TIE!';
+    winDisplay.textContent = 'Tie game';
     winDisplay.classList.add('tie');
     sfxLose();
   } else {
     const winner = (data.players || []).find(p => p.id === data.winnerId);
     const isWinner = data.winnerId === myPlayerId;
     if (data.forfeit) {
-      winDisplay.textContent = isWinner ? 'OPPONENT FORFEITED - YOU WIN!' : 'YOU FORFEITED';
+      winDisplay.textContent = isWinner ? 'Opponent forfeited — you win!' : 'You forfeited';
     } else {
-      winDisplay.textContent = isWinner ? 'YOU WIN!' : `${winner ? winner.name : 'Someone'} WINS!`;
+      winDisplay.textContent = isWinner ? 'You win!' : `${winner ? winner.name : 'Someone'} wins!`;
     }
     if (isWinner && !data.forfeit) {
       winDisplay.classList.add('win');
@@ -1307,13 +1530,16 @@ socket.on('gameEnd', (data) => {
     }
   }
 
-  // Play Again: available to all players (consensus-based)
   playAgainVoted = false;
   $('playAgainBtn').style.display = 'inline-block';
   $('playAgainBtn').textContent = 'PLAY AGAIN';
   $('playAgainBtn').disabled = false;
 
   showScreen('endScreen');
+
+  // Final standings announcement
+  const standingLines = sortedRankings.map((r, i) => `${i + 1}. ${escapeHtml(r.name)} — ${r.score} points`).join('. ');
+  announce(`Game over. Final standings: ${standingLines}. ${winDisplay.textContent}`);
 });
 
 socket.on('playAgainVote', ({ voteCount, playerCount, votedId }) => {
@@ -1327,18 +1553,15 @@ socket.on('playAgainVote', ({ voteCount, playerCount, votedId }) => {
   }
 
   if (voteCount >= playerCount) {
-    // Both ready — gameReset will fire shortly, reset button state
-    btn.textContent = 'STARTING...';
+    btn.textContent = 'STARTING…';
     btn.disabled = true;
   } else if (voteCount > 0 && votedId !== myPlayerId) {
-    // Show progress without changing self state
     btn.textContent = playAgainVoted ? 'READY ✓' : 'PLAY AGAIN';
   }
 });
 
 socket.on('gameReset', (data) => {
   _hideDisconnectBanner();
-  // Clear any stale result/end-screen content
   if ($('resultCards')) $('resultCards').innerHTML = '';
   if ($('resultScores')) $('resultScores').innerHTML = '';
   if ($('examplesContainer')) $('examplesContainer').innerHTML = '';
@@ -1348,7 +1571,6 @@ socket.on('gameReset', (data) => {
     $('winnerDisplay').classList.remove('win', 'tie');
   }
 
-  // Reset game state
   players = (data.players || []).map(p => ({ ...p }));
   roomHostId = data.hostId;
   isHost = (roomHostId === myPlayerId);
@@ -1359,14 +1581,15 @@ socket.on('gameReset', (data) => {
   currentStartLetter = null;
   currentEndLetter = null;
   submitted = false;
+  roundScores = { me: 0, opp: 0 };
+  updateScoreHint();
   clearInterval(timerInterval);
 
   renderRoomLobby();
-  showScreen('roomLobbyScreen', true /* instant — skip animation to avoid race */);
+  showScreen('roomLobbyScreen', true);
+  announce('New game starting. Returned to room lobby.');
 });
 
-// Server pushes the authoritative category list whenever the host changes it.
-// Re-render so all clients (host + non-host) see the new state immediately.
 socket.on('categoriesUpdated', (data) => {
   if (data && data.categories) {
     roomCategories = data.categories;
@@ -1374,19 +1597,26 @@ socket.on('categoriesUpdated', (data) => {
   }
 });
 
+socket.on('comfortModeUpdated', (data) => {
+  const p = players.find(p => p.id === data.playerId);
+  if (p) {
+    p.comfortMode = data.comfortMode;
+  }
+  renderRoomLobby();
+});
+
 // === Timer ===
 function startTimer() {
   clearInterval(timerInterval);
-
   $('timerBar').classList.remove('critical');
   $('gameScreen').classList.remove('screen-critical');
   document.body.classList.remove('timer-critical');
-
-  let lastTickSecond = 99;
+  lastAnnouncedSecond = -1;
+  lastTimerAnnounceSecond = -1;
 
   function updateTimer() {
     const now = Date.now();
-    const totalTime = 10000;
+    const totalTime = currentRoundDuration;
     const remaining = Math.max(0, roundDeadline - now);
     const secondsLeft = Math.ceil(remaining / 1000);
     const progress = (remaining / totalTime) * 100;
@@ -1394,9 +1624,23 @@ function startTimer() {
     $('timerDisplay').textContent = secondsLeft;
     $('timerProgress').style.width = progress + '%';
 
-    if (secondsLeft <= 4 && secondsLeft !== lastTickSecond) {
+    const timerRegion = $('srTimer');
+    if (timerRegion) {
+      timerRegion.textContent = `${secondsLeft} seconds remaining`;
+    }
+
+    if (secondsLeft <= 4 && secondsLeft !== lastAnnouncedSecond) {
       sfxTimerTick();
-      lastTickSecond = secondsLeft;
+      lastAnnouncedSecond = secondsLeft;
+    }
+
+    // Polite live announcement only at 5s and 1s — never spams SR
+    if ((secondsLeft === 5 || secondsLeft === 1) && secondsLeft !== lastTimerAnnounceSecond) {
+      lastTimerAnnounceSecond = secondsLeft;
+      const msg = secondsLeft === 5
+        ? `5 seconds left in this round`
+        : `1 second left`;
+      announce(msg);
     }
 
     if (secondsLeft <= 4) {
@@ -1416,6 +1660,7 @@ function startTimer() {
       $('timerBar').classList.remove('critical');
       $('gameScreen').classList.remove('screen-critical');
       document.body.classList.remove('timer-critical');
+      announce('Time up.');
     }
   }
 
@@ -1425,6 +1670,11 @@ function startTimer() {
 
 // === Init ===
 (function initProfile() {
+  // Restore comfort prefs first so all subsequent rendering uses correct scale
+  loadComfortPrefs();
+  applyComfortPrefs();
+  watchSystemComfortPrefs();
+
   const profile = loadProfile();
   if (profile) {
     const nameInput = $('playerNameInput');
@@ -1444,14 +1694,9 @@ function startTimer() {
     const roomCode = params.get('room');
     if (roomCode) {
       const code = roomCode.toUpperCase().trim();
-      // Always set auto-join — works even on fresh devices without a saved profile
       autoJoinRoomCode = code;
-      // Pre-fill join input as fallback
       const joinInput = $('joinRoomInput');
       if (joinInput) joinInput.value = code;
-      // Show room code on name screen so user knows they're joining
-      const subtitle = document.querySelector('.arcade-subtitle');
-      if (subtitle) subtitle.textContent = 'JOIN ROOM ' + code;
     }
   } catch(e) {
     console.warn('URL parse failed:', e);
