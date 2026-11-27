@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0a0a1a">
   <title>WordBridge - Multiplayer</title>
@@ -107,30 +107,77 @@
         <div id="submissionsStatus" class="submissions-status" aria-live="polite" aria-label="Players who have submitted"></div>
       </div>
 
-      <div class="tiles" aria-hidden="true">
-        <div id="tile1" class="tile">A</div>
-        <div id="tile2" class="tile">A</div>
-      </div>
-      <p class="tile-pair-text sr-only" id="tilePairAnnounce">Start letter A, end letter A</p>
-
-      <p class="score-hint" id="scoreHint" aria-live="polite">
-        <span class="score-hint-row"><span class="dot dot-you"></span>You: <strong id="scoreHintYou">0</strong></span>
-        <span class="score-hint-divider"></span>
-        <span class="score-hint-row"><span class="dot dot-opp"></span>Opponents: <strong id="scoreHintOpp">0</strong></span>
-      </p>
-
-      <div class="timer" id="timer" role="timer" aria-label="Round timer">
-        <div id="timerBar" class="timer-bar">
-          <div id="timerProgress" class="timer-progress"></div>
+      <div class="game-play">
+        <div class="tiles" aria-hidden="true">
+          <div id="tile1" class="tile">A</div>
+          <div id="tile2" class="tile">A</div>
         </div>
-        <div id="timerDisplay" class="timer-display" aria-hidden="true">10</div>
-        <p class="timer-text-label">seconds left</p>
+        <p class="tile-pair-text sr-only" id="tilePairAnnounce">Start letter A, end letter A</p>
+
+        <p class="score-hint" id="scoreHint" aria-live="polite">
+          <span class="score-hint-row"><span class="dot dot-you"></span>You: <strong id="scoreHintYou">0</strong></span>
+          <span class="score-hint-divider"></span>
+          <span class="score-hint-row"><span class="dot dot-opp"></span>Opponents: <strong id="scoreHintOpp">0</strong></span>
+        </p>
+
+        <div class="timer" id="timer" role="timer" aria-label="Round timer">
+          <div id="timerBar" class="timer-bar">
+            <div id="timerProgress" class="timer-progress"></div>
+          </div>
+          <div id="timerDisplay" class="timer-display" aria-hidden="true">10</div>
+          <p class="timer-text-label">seconds left</p>
+        </div>
       </div>
 
-      <label class="sr-only" for="wordInput">Type your word for this round</label>
-      <input type="text" id="wordInput" class="word-input" placeholder="TYPE A WORD..." maxlength="20" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <div class="game-input-zone">
+        <div id="wordDisplay" class="word-display empty" tabindex="0" role="group" aria-label="Your word" aria-describedby="wordInputHelp">
+          <span id="wordDisplayValue" class="word-display-value" aria-hidden="true">TAP OR TYPE</span>
+          <span class="word-caret" aria-hidden="true"></span>
+          <span id="wordDisplayAnnounce" class="sr-only" aria-live="polite" aria-atomic="true">No letters entered</span>
+        </div>
 
-      <p class="submit-hint">Press <kbd>Enter</kbd> to submit</p>
+        <p id="wordFeedback" class="word-feedback" role="status" aria-live="polite">Tap or type · ⌫ delete · Enter submit</p>
+
+        <div id="gameKeyboard" class="game-keyboard" role="group" aria-label="Word keyboard" aria-describedby="wordInputHelp">
+          <div class="keyboard-row keyboard-row-1">
+            <button class="word-key" type="button" data-key="Q" aria-label="Letter Q">Q</button>
+            <button class="word-key" type="button" data-key="W" aria-label="Letter W">W</button>
+            <button class="word-key" type="button" data-key="E" aria-label="Letter E">E</button>
+            <button class="word-key" type="button" data-key="R" aria-label="Letter R">R</button>
+            <button class="word-key" type="button" data-key="T" aria-label="Letter T">T</button>
+            <button class="word-key" type="button" data-key="Y" aria-label="Letter Y">Y</button>
+            <button class="word-key" type="button" data-key="U" aria-label="Letter U">U</button>
+            <button class="word-key" type="button" data-key="I" aria-label="Letter I">I</button>
+            <button class="word-key" type="button" data-key="O" aria-label="Letter O">O</button>
+            <button class="word-key" type="button" data-key="P" aria-label="Letter P">P</button>
+          </div>
+          <div class="keyboard-row keyboard-row-2">
+            <button class="word-key" type="button" data-key="A" aria-label="Letter A">A</button>
+            <button class="word-key" type="button" data-key="S" aria-label="Letter S">S</button>
+            <button class="word-key" type="button" data-key="D" aria-label="Letter D">D</button>
+            <button class="word-key" type="button" data-key="F" aria-label="Letter F">F</button>
+            <button class="word-key" type="button" data-key="G" aria-label="Letter G">G</button>
+            <button class="word-key" type="button" data-key="H" aria-label="Letter H">H</button>
+            <button class="word-key" type="button" data-key="J" aria-label="Letter J">J</button>
+            <button class="word-key" type="button" data-key="K" aria-label="Letter K">K</button>
+            <button class="word-key" type="button" data-key="L" aria-label="Letter L">L</button>
+          </div>
+          <div class="keyboard-row keyboard-row-3">
+            <button class="word-key word-key-wide" type="button" data-action="backspace" aria-label="Delete last letter">⌫ DEL</button>
+            <button class="word-key" type="button" data-key="Z" aria-label="Letter Z">Z</button>
+            <button class="word-key" type="button" data-key="X" aria-label="Letter X">X</button>
+            <button class="word-key" type="button" data-key="C" aria-label="Letter C">C</button>
+            <button class="word-key" type="button" data-key="V" aria-label="Letter V">V</button>
+            <button class="word-key" type="button" data-key="B" aria-label="Letter B">B</button>
+            <button class="word-key" type="button" data-key="N" aria-label="Letter N">N</button>
+            <button class="word-key" type="button" data-key="M" aria-label="Letter M">M</button>
+            <button class="word-key word-key-hyphen" type="button" data-key="-" aria-label="Hyphen">-</button>
+          </div>
+        </div>
+
+        <button id="submitWordBtn" class="arcade-btn arcade-btn-primary game-submit-btn" type="button" aria-label="Submit word">SUBMIT WORD</button>
+        <p id="wordInputHelp" class="sr-only">Use the on-screen letter keys, or type letters on a physical keyboard. Press Backspace to delete the last letter. Press Enter or the Submit word button to send your answer. Words may contain letters and a hyphen.</p>
+      </div>
 
       <div class="reactions-bar" id="gameReactions" role="group" aria-label="Send an emoji reaction">
         <button class="reaction-btn" data-emoji="💨" type="button" aria-label="Send poo emoji">💨</button>

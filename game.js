@@ -1,6 +1,59 @@
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
+// === Session lifecycle ===
+// Native Socket.IO connection-state recovery is disabled by the server.
+// Identity is a stable playerId backed by an opaque resume token. The token is
+// per-tab (sessionStorage) and is read on every handshake so a page refresh can
+// resume the same player/room. A resume failure must never silently register a
+// second player or kick the tab that already owns the token.
+const STORAGE_RESUME_TOKEN = 'wb_resume_token';
+let memoryResumeToken = null;
+
+function readResumeToken() {
+  try {
+    const stored = window.sessionStorage.getItem(STORAGE_RESUME_TOKEN) || null;
+    if (stored) memoryResumeToken = stored;
+    return stored || memoryResumeToken;
+  } catch (e) {
+    // Storage may be blocked (privacy mode/partitioning). The in-memory copy
+    // still allows same-page transient reconnects; a full page reload cannot
+    // resume without persistent storage.
+    return memoryResumeToken;
+  }
+}
+function storeResumeToken(token) {
+  memoryResumeToken = token || null;
+  try {
+    if (token) window.sessionStorage.setItem(STORAGE_RESUME_TOKEN, token);
+    else window.sessionStorage.removeItem(STORAGE_RESUME_TOKEN);
+  } catch (e) { /* memory fallback above remains authoritative this page */ }
+}
+
+// `authoritativeReady` means the server has sent the authoritative room
+// snapshot for the current connection/registration. It starts false: no room
+// or game command may be sent until a real snapshot (or create/join ack) has
+// been applied. Tests must drive that same snapshot flow.
+let authoritativeReady = false;
+let browserOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+let registrationPending = false;
+let resumeConflict = false;
+let resumeRetryTimer = null;
+let resumeRetryAttempt = 0;
+let resumeRetryExhausted = false;
+let resumeNoticeShown = false;
+let sessionExpiredHandled = false;
+let serverClockOffset = 0;
+let pageHiding = false;
+
+// Bounded, cancellable retries for RESUME_IN_USE. Middleware rejections do not
+// auto-retry, and we never fall back to setName while another tab owns the
+// token. A refresh usually frees the old transport within the first attempt.
+const RESUME_RETRY_DELAYS = [400, 800, 1500, 2500, 4000, 6000, 9000];
+
 const socket = io({
+  // Function form: read the token again for every reconnect attempt, including
+  // attempts that happen after SESSION_EXPIRED cleared it.
+  auth: (callback) => callback({ resumeToken: readResumeToken() }),
   transports: isIOS ? ['polling', 'websocket'] : ['websocket', 'polling'],
   reconnection: true,
   reconnectionAttempts: 10,
@@ -9,37 +62,240 @@ const socket = io({
   timeout: 20000
 });
 
-// Re-authenticate on reconnect (server connection state recovery fallback)
-socket.on('connect', () => {
-  // On a recovered connection the server already restored our session
-  // (name, room, comfortMode) via roomStateRestored + nameConfirmed. Emitting
-  // setName again would trigger a second nameConfirmed that could eject us
-  // from the restored room/game view. Only fresh connections need setName.
-  if (socket.recovered) {
-    // Re-sync comfort mode preference for round timing
-    if (comfortPrefs.enabled) {
-      socket.emit('setComfortMode', { enabled: true });
+function serverNow() {
+  return Date.now() + serverClockOffset;
+}
+
+function cancelResumeRetry() {
+  if (resumeRetryTimer) {
+    clearTimeout(resumeRetryTimer);
+    resumeRetryTimer = null;
+  }
+  resumeRetryAttempt = 0;
+  resumeRetryExhausted = false;
+}
+
+function scheduleResumeRetry() {
+  if (resumeRetryTimer || !resumeConflict) return;
+
+  if (resumeRetryAttempt >= RESUME_RETRY_DELAYS.length) {
+    if (!resumeRetryExhausted) {
+      resumeRetryExhausted = true;
+      const message = 'This session is still active in another tab. Close it and refresh, or enter your name to play as a new player.';
+      if (myPlayerId) offerNewSessionAfterConflict(message);
+      else showError(message, 'nameError');
     }
     return;
   }
-  if (myName) {
+
+  const delay = RESUME_RETRY_DELAYS[resumeRetryAttempt++];
+  resumeRetryTimer = setTimeout(() => {
+    resumeRetryTimer = null;
+    if (resumeConflict && !socket.connected) socket.connect();
+  }, delay);
+}
+
+function retryAfterUserGesture() {
+  if (socket.connected || browserOffline) return;
+  if (resumeConflict) {
+    // A new visibility/online gesture may start one fresh bounded cycle.
+    if (resumeRetryExhausted) {
+      resumeRetryAttempt = 0;
+      resumeRetryExhausted = false;
+    }
+    scheduleResumeRetry();
+  } else {
+    socket.connect();
+  }
+}
+
+function handleSessionExpired() {
+  if (sessionExpiredHandled) {
+    showToast('Session expired. Enter your name to continue.');
+    return;
+  }
+  sessionExpiredHandled = true;
+  storeResumeToken(null);
+  cancelResumeRetry();
+  resumeConflict = false;
+  resumeNoticeShown = false;
+  registrationPending = false;
+  authoritativeReady = false;
+  myPlayerId = null;
+  _renamingViaProfile = false;
+  setEnterButtonLabel(false);
+
+  // Clear stale room/game state once. Never recreate the old room: the user
+  // explicitly registers again from the name screen.
+  resetRoomState();
+  const profile = loadProfile();
+  if (profile && profile.name) $('playerNameInput').value = profile.name;
+  showScreen('nameScreen');
+  showError('Your session expired. Enter your name to continue. Your old room was not recreated.', 'nameError');
+
+  // Middleware rejections do not auto-reconnect; try one fresh handshake
+  // without a token (the auth callback now reads null).
+  setTimeout(() => { if (!socket.connected) socket.connect(); }, 0);
+}
+
+function setEnterButtonLabel(conflict) {
+  const button = $('enterLobbyBtn');
+  if (!button) return;
+  const label = conflict ? 'PLAY AS NEW PLAYER' : 'ENTER LOBBY';
+  if (button.textContent !== label) button.textContent = label;
+  button.setAttribute('aria-label', label);
+}
+
+function handleResumeInUse() {
+  if (!readResumeToken()) return;
+  resumeConflict = true;
+  authoritativeReady = false;
+
+  if (!resumeNoticeShown) {
+    resumeNoticeShown = true;
+    if (myPlayerId) {
+      showToast('This session is active in another tab. Reconnecting…');
+    } else {
+      const profile = loadProfile();
+      if (profile && profile.name) $('playerNameInput').value = profile.name;
+      setEnterButtonLabel(true);
+      showScreen('nameScreen');
+      showError(
+        'This game session is active in another tab. Close it and wait to reconnect, or enter your name to play as a new player.',
+        'nameError'
+      );
+    }
+  }
+
+  scheduleResumeRetry();
+}
+
+// A tab that already had an identity can lose the token to another live tab
+// (for example a half-open transport held past the retry budget). Automatic
+// retries must not run forever, so offer the same explicit "play as a new
+// player" escape as a fresh duplicate tab. The old token is retained until
+// the user actually submits a name.
+function offerNewSessionAfterConflict(message) {
+  const profile = loadProfile();
+  if (profile && profile.name) $('playerNameInput').value = profile.name;
+  setEnterButtonLabel(true);
+  myPlayerId = null;
+  authoritativeReady = false;
+  showScreen('nameScreen');
+  showError(message, 'nameError');
+}
+
+function refreshInputAvailability() {
+  const open = typeof isWordInputOpen === 'function' && isWordInputOpen();
+  if (typeof setKeyboardEnabled === 'function') setKeyboardEnabled(open);
+
+  if ((!socket.connected || browserOffline) && isGameScreenActive() && !submitted) {
+    setWordFeedback(browserOffline ? 'Offline' : 'Reconnecting…', 'error');
+    return;
+  }
+  const feedbackEl = $('wordFeedback');
+  if (socket.connected && !browserOffline && open && feedbackEl &&
+      (feedbackEl.textContent === 'Reconnecting…' || feedbackEl.textContent === 'Offline')) {
+    setWordFeedback(WORD_DEFAULT_FEEDBACK);
+  }
+}
+
+function syncComfortMode() {
+  // Always send the stored preference, including false. The server session
+  // can outlive this page's localStorage/offline toggles, so only emitting
+  // "true" would leave a stale comfort duration after reconnect.
+  if (socket.connected && !browserOffline && myPlayerId) {
+    socket.emit('setComfortMode', { enabled: !!comfortPrefs.enabled });
+  }
+}
+
+socket.on('connect', () => {
+  // A successful transport handshake proves connectivity even when a transient
+  // navigator.onLine=false reading never produced a matching online event.
+  browserOffline = false;
+  pageHiding = false;
+  cancelResumeRetry();
+  resumeConflict = false;
+  resumeNoticeShown = false;
+
+  // A token means the server will resume identity + room automatically and
+  // follow with nameConfirmed + roomStateRestored. Never emit setName here.
+  const token = readResumeToken();
+  authoritativeReady = !token;
+
+  if (!token && registrationPending && myName) {
+    // The user's explicit name entry may have raced a disconnect. Re-send on
+    // the fresh transport; it is cleared only when nameConfirmed arrives.
+    authoritativeReady = false;
     socket.emit('setName', myName);
   }
-  // Re-sync comfort mode preference for round timing
-  if (comfortPrefs.enabled) {
-    socket.emit('setComfortMode', { enabled: true });
+
+  syncComfortMode();
+  refreshInputAvailability();
+});
+
+socket.on('disconnect', (reason) => {
+  authoritativeReady = false;
+  refreshInputAvailability();
+  // The server only force-disconnects a resumed socket when its claim lost a
+  // race (old transport closing / generation change). Socket.IO does not
+  // auto-reconnect after `io server disconnect`, so retry the same token with
+  // the same bounded policy; a truly expired token becomes SESSION_EXPIRED.
+  if (reason === 'io server disconnect' && !pageHiding && readResumeToken()) {
+    resumeConflict = true;
+    scheduleResumeRetry();
   }
+});
+
+socket.on('connect_error', (error) => {
+  const code = error && error.data && error.data.code;
+  if (code === 'SESSION_EXPIRED') {
+    handleSessionExpired();
+    return;
+  }
+  if (code === 'RESUME_IN_USE') {
+    handleResumeInUse();
+    return;
+  }
+  authoritativeReady = false;
+  refreshInputAvailability();
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && !socket.connected) {
-    socket.connect();
+  if (document.visibilityState !== 'visible') return;
+  retryAfterUserGesture();
+});
+
+window.addEventListener('offline', () => {
+  // Do not force a transport disconnect: Socket.IO/engine.io may close it on
+  // its own schedule. Block game/room commands immediately, but do not
+  // invalidate authoritativeReady solely because the browser went offline: if
+  // the transport stays live, online will simply resume sending without a new
+  // snapshot.
+  browserOffline = true;
+  refreshInputAvailability();
+});
+
+window.addEventListener('online', () => {
+  browserOffline = false;
+  retryAfterUserGesture();
+  if (socket.connected) {
+    syncComfortMode();
+    refreshInputAvailability();
   }
 });
 
-window.addEventListener('offline', () => socket.disconnect());
-window.addEventListener('online', () => {
-  if (!socket.connected) socket.connect();
+// Unload is a transport disconnect only: the server keeps the session during
+// its grace window so the refreshed page can resume it. Never emit leaveRoom.
+window.addEventListener('pagehide', () => {
+  pageHiding = true;
+  cancelResumeRetry();
+  if (socket.connected) socket.disconnect();
+});
+
+window.addEventListener('pageshow', (event) => {
+  pageHiding = false;
+  if (event.persisted && !socket.connected) socket.connect();
 });
 
 // === State ===
@@ -55,19 +311,47 @@ let roundDeadline = null;
 let currentRoundDuration = 10000; // ms, from server roundStart.timeLeft (authoritative)
 let currentStartLetter = null;
 let currentEndLetter = null;
+let currentMatchId = null;
 let timerInterval = null;
 let lastAnnouncedSecond = -1;
 let lastTimerAnnounceSecond = -1;
 let submitted = false;
-let restoredIntoRoom = false; // set when roomStateRestored re-places us in a room/game
+let currentWord = '';       // uppercase text shown in the on-screen answer display
+const WORD_MAX_LENGTH = 20;
 let _renamingViaProfile = false; // set while an editName round-trip is in flight
 let wordLookupClient = {};
 let wordCategoriesClient = {};
 let roomCategories = { noun_adj_verb: true, countries: true, us_states: true, us_cities: true };
 let autoJoinRoomCode = null;  // from URL param ?room=
 let roundScores = { me: 0, opp: 0 }; // live score feed for the always-visible hint
+let disconnectPlayers = new Map(); // playerId -> name, survives multi-disconnect banners
+let finishedGameEnd = null; // stored finished payload; membership changes must not re-render it
+let finishedVoterIds = []; // authoritative play-again voter ids for the current finished room
 
 const $ = id => document.getElementById(id);
+
+// Room-affecting commands are dropped, not buffered, until the socket is up
+// and the latest authoritative restore has been applied. This prevents
+// Socket.IO's offline send buffer from replaying stale create/join/submit
+// commands after a reconnect.
+function canSendRoomCommand() {
+  return socket.connected && !browserOffline && authoritativeReady && !!myPlayerId;
+}
+
+function emitRoomCommand(event, payload) {
+  if (!canSendRoomCommand()) {
+    showToast('Still reconnecting — try again in a moment');
+    return false;
+  }
+  socket.emit(event, payload);
+  return true;
+}
+
+function emitIfConnected(event, payload) {
+  if (!socket.connected || browserOffline) return false;
+  socket.emit(event, payload);
+  return true;
+}
 
 // Display order + labels for category toggles (used by renderCategoryToggles).
 const CATEGORY_LABELS = {
@@ -145,10 +429,18 @@ function showScreen(screenId, instant = false) {
   }
 
   const current = document.querySelector('.screen.active');
-  if (!instant && current && current.id !== screenId) {
+  // Background tabs throttle/disable CSS animations, so animationend may never
+  // arrive. Route immediately when hidden and keep a wall-clock fallback for
+  // every transition so reconnect/restore state cannot be stuck off-screen.
+  if (!instant && current && current.id !== screenId && !document.hidden) {
     current.classList.add('exiting');
+    let fallbackTimer = null;
     const handler = function() {
       current.removeEventListener('animationend', handler);
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
       if (_pendingTransition && _pendingTransition.handler === handler) {
         _pendingTransition = null;
       }
@@ -158,6 +450,9 @@ function showScreen(screenId, instant = false) {
     };
     _pendingTransition = { el: current, handler };
     current.addEventListener('animationend', handler, { once: true });
+    fallbackTimer = setTimeout(() => {
+      if (_pendingTransition && _pendingTransition.handler === handler) handler();
+    }, 400);
   } else {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active', 'exiting'));
     _pendingTransition = null;
@@ -222,8 +517,11 @@ function setComfortMode(enabled) {
   comfortPrefs.highContrast = comfortPrefs.enabled || sysContrast;
   applyComfortPrefs();
   saveComfortPrefs();
-  // Sync preference with server so round timing adjusts (next round only)
-  socket.emit('setComfortMode', { enabled: !!enabled });
+  // Sync preference with server so round timing adjusts (next round only).
+  // It is also re-sent after registration/resume/online confirms the player.
+  if (socket.connected && !browserOffline && myPlayerId) {
+    socket.emit('setComfortMode', { enabled: !!enabled });
+  }
 }
 
 // React to system preference changes if user hasn't set their own
@@ -489,18 +787,19 @@ function renderRoomLobby() {
   list.innerHTML = players.map(p => {
     const isYou = p.id === myPlayerId;
     const isRoomHost = p.id === roomHostId;
-    const readyLabel = p.ready ? 'Ready' : 'Not ready';
+    const connected = p.connected !== false;
+    const readyLabel = !connected ? 'Reconnecting' : (p.ready ? 'Ready' : 'Not ready');
     return `
-      <div class="player-item${p.ready ? ' ready' : ''}${isRoomHost ? ' host' : ''}">
+      <div class="player-item${p.ready && connected ? ' ready' : ''}${isRoomHost ? ' host' : ''}${connected ? '' : ' reconnecting'}">
         <div class="player-name">
           <span class="player-name-text">${escapeHtml(p.name)}${isYou ? ' (you)' : ''}${isRoomHost ? '<span class="host-crown" aria-label="Host">Host</span>' : ''}${p.comfortMode ? '<span class="comfort-badge" aria-label="Comfort mode enabled">Comfort</span>' : ''}</span>
         </div>
-        <span class="ready-badge ${p.ready ? 'ready-on' : 'ready-off'}" aria-label="${readyLabel}">${p.ready ? 'Ready' : 'Not ready'}</span>
+        <span class="ready-badge ${p.ready && connected ? 'ready-on' : 'ready-off'}" aria-label="${readyLabel}">${!connected ? 'Reconnecting' : (p.ready ? 'Ready' : 'Not ready')}</span>
       </div>
     `;
   }).join('');
 
-  const readyCount = players.filter(p => p.ready).length;
+  const readyCount = players.filter(p => p.ready && p.connected !== false).length;
   const status = $('roomReadyStatus');
   status.textContent = `${readyCount} of ${players.length} ready`;
 
@@ -519,11 +818,12 @@ function renderRoomLobby() {
     readyBtn.classList.add('pulsing');
   }
 
-  // Start Game button
+  // Start Game button. Disconnected (reconnecting) members are not live, so
+  // the host cannot start until every player is connected and ready.
   const startBtn = $('startGameBtn');
   if (isHost) {
     startBtn.style.display = 'inline-block';
-    const allReady = players.length >= 2 && players.every(p => p.ready);
+    const allReady = players.length >= 2 && players.every(p => p.ready && p.connected !== false);
     startBtn.disabled = !allReady;
     startBtn.setAttribute('aria-disabled', String(!allReady));
   } else {
@@ -583,15 +883,280 @@ function renderCategoryToggles() {
   }).join('');
 }
 
+function stopPhaseTimers() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+  lastAnnouncedSecond = -1;
+  lastTimerAnnounceSecond = -1;
+  const timerBar = $('timerBar');
+  if (timerBar) timerBar.classList.remove('critical');
+  const gameScreen = $('gameScreen');
+  if (gameScreen) gameScreen.classList.remove('screen-critical');
+  document.body.classList.remove('timer-critical');
+}
+
+function resetGamePhaseForLobby() {
+  stopPhaseTimers();
+  currentRound = 0;
+  roundDeadline = null;
+  currentStartLetter = null;
+  currentEndLetter = null;
+  currentMatchId = null;
+  submitted = false;
+  currentWord = '';
+  playAgainVoted = false;
+  finishedGameEnd = null;
+  finishedVoterIds = [];
+  const display = $('wordDisplay');
+  if (display) display.classList.remove('submitted', 'invalid');
+  const submissions = $('submissionsStatus');
+  if (submissions) submissions.innerHTML = '';
+  resetWordEntry();
+  updateScoreHint();
+}
+
 function resetRoomState() {
   myRoomCode = null;
   isHost = false;
   players = [];
   roomHostId = null;
-  restoredIntoRoom = false;
+  currentRound = 0;
+  roundDeadline = null;
+  currentStartLetter = null;
+  currentEndLetter = null;
+  currentMatchId = null;
+  submitted = false;
+  currentWord = '';
+  playAgainVoted = false;
+  finishedGameEnd = null;
+  finishedVoterIds = [];
   roundScores = { me: 0, opp: 0 };
+  stopPhaseTimers();
+  disconnectPlayers.clear();
+  renderDisconnectBanner();
   updateScoreHint();
 }
+
+// Authoritative roster replacement/upsert helpers. Roster identity is the
+// stable player id only — display names are allowed to collide.
+function normalizePlayers(list) {
+  if (!Array.isArray(list)) return [];
+  const byId = new Map();
+  for (const raw of list) {
+    if (!raw || !raw.id) continue;
+    const normalized = { ...raw };
+    normalized.connected = raw.connected !== false;
+    normalized.submitted = !!raw.submitted;
+    byId.set(raw.id, { ...(byId.get(raw.id) || {}), ...normalized });
+  }
+  return [...byId.values()];
+}
+
+function setRoster(list, hostId) {
+  players = normalizePlayers(list);
+  if (hostId !== undefined && hostId !== null) roomHostId = hostId;
+  isHost = !!myPlayerId && roomHostId === myPlayerId;
+
+  const rosterById = new Map(players.map(player => [player.id, player]));
+  for (const id of [...disconnectPlayers.keys()]) {
+    const player = rosterById.get(id);
+    if (!player || player.connected !== false) disconnectPlayers.delete(id);
+  }
+  for (const player of players) {
+    if (player.connected === false) disconnectPlayers.set(player.id, player.name);
+  }
+  renderDisconnectBanner();
+}
+
+function syncScoresFromRoster() {
+  const me = players.find(player => player.id === myPlayerId);
+  roundScores.me = me ? (me.score || 0) : 0;
+  roundScores.opp = players
+    .filter(player => player.id !== myPlayerId)
+    .reduce((sum, player) => sum + (player.score || 0), 0);
+  updateScoreHint();
+}
+
+function renderSubmissionChipsFromRoster() {
+  const container = $('submissionsStatus');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const player of players) {
+    if (player.id === myPlayerId || !player.submitted) continue;
+    const chip = document.createElement('div');
+    chip.className = 'submission-item';
+    chip.dataset.pid = player.id;
+    chip.setAttribute('aria-label', `${player.name} submitted`);
+    chip.textContent = player.name;
+    container.appendChild(chip);
+  }
+}
+
+function renderDisconnectBanner() {
+  const names = [...disconnectPlayers.values()].filter(Boolean);
+  const gameScreen = $('gameScreen');
+  const gameHeader = document.querySelector('#gameScreen .game-header');
+  const gameNotice = document.getElementById('gameDisconnectNotice');
+  const globalBanner = document.getElementById('disconnectBanner');
+  const fullText = `${names.join(', ')} disconnected. Waiting to reconnect.`;
+  const count = names.length;
+  const summary = `${count} ${count === 1 ? 'player' : 'players'} disconnected. Waiting to reconnect.`;
+
+  // In the active game the disconnect status shares the reserved HUD status
+  // row instead of floating over the play area. The visible copy is compact;
+  // the complete name list stays in the alert's accessible text.
+  if (names.length && gameHeader) {
+    let notice = gameNotice;
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.id = 'gameDisconnectNotice';
+      notice.className = 'disconnect-banner game-disconnect-notice';
+      notice.setAttribute('role', 'alert');
+      notice.setAttribute('aria-atomic', 'true');
+      gameHeader.appendChild(notice);
+    }
+    const countSummary = `${count} ${count === 1 ? 'player' : 'players'} disconnected.`;
+    notice.innerHTML =
+      `<span class="disconnect-banner-icon" aria-hidden="true">!</span>` +
+      `<span class="game-disconnect-summary" aria-hidden="true">` +
+        `<span class="disconnect-summary-count">${escapeHtml(countSummary)}</span>` +
+        `<span class="disconnect-summary-wait"> Waiting to reconnect.</span>` +
+      `</span>` +
+      `<span class="sr-only">${escapeHtml(fullText)}</span>`;
+    notice.title = fullText;
+    notice.dataset.count = String(count);
+    if (gameScreen) gameScreen.classList.add('has-disconnect-notice');
+  } else {
+    if (gameNotice) gameNotice.remove();
+    if (gameScreen) gameScreen.classList.remove('has-disconnect-notice');
+  }
+
+  // Keep the full result/end alert mounted for the screen transition. CSS
+  // hides it during the active game (where the compact HUD notice is shown)
+  // and reveals it on the result/end screens.
+  if (!names.length) {
+    if (globalBanner) globalBanner.remove();
+    return;
+  }
+
+  const element = globalBanner || document.createElement('div');
+  if (!globalBanner) {
+    element.id = 'disconnectBanner';
+    element.className = 'disconnect-banner';
+    element.setAttribute('role', 'alert');
+    document.body.appendChild(element);
+  }
+  element.innerHTML = `<span class="disconnect-banner-icon" aria-hidden="true">!</span><span>${escapeHtml(fullText)}</span>`;
+}
+
+function hideDisconnectBanners() {
+  disconnectPlayers.clear();
+  renderDisconnectBanner();
+}
+
+// Initial create/join acknowledgements are authoritative for the lobby view;
+// roomStateRestored remains the authority after name registration/resume.
+function applyRoomEntry(data) {
+  if (!data || !data.code) return;
+  authoritativeReady = true;
+  autoJoinRoomCode = null;
+  myRoomCode = data.code;
+  roomHostId = data.hostId || null;
+  isHost = !!myPlayerId && roomHostId === myPlayerId;
+  if (data.categories) roomCategories = { ...roomCategories, ...data.categories };
+  if (data.matchId !== undefined && data.matchId !== null) currentMatchId = data.matchId;
+  setRoster(data.players, data.hostId || null);
+  resetGamePhaseForLobby();
+  renderRoomLobby();
+  showScreen('roomLobbyScreen', true);
+  refreshInputAvailability();
+}
+
+// Apply the authoritative post-registration/resume snapshot. This is the only
+// path that re-places a refreshed client into lobby/playing/paused/finished.
+function applyRoomStateSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return;
+
+  cancelResumeRetry();
+  resumeConflict = false;
+  resumeNoticeShown = false;
+  authoritativeReady = true;
+  setEnterButtonLabel(false);
+
+  if (Number.isFinite(Number(snapshot.serverNow))) {
+    serverClockOffset = Number(snapshot.serverNow) - Date.now();
+  }
+
+  stopPhaseTimers();
+  const code = snapshot.code || null;
+
+  if (!code || snapshot.state === 'online') {
+    resetRoomState();
+    roomCategories = { noun_adj_verb: true, countries: true, us_states: true, us_cities: true };
+    if (!myPlayerId) {
+      showScreen('nameScreen', true);
+      refreshInputAvailability();
+      return;
+    }
+    showScreen('lobbyScreen', true);
+    socket.emit('requestOnlinePlayers');
+
+    // Invite links join exactly once, only after the roomless snapshot confirms
+    // the name registration/resume has completed.
+    if (autoJoinRoomCode) {
+      const inviteCode = autoJoinRoomCode;
+      autoJoinRoomCode = null;
+      if (canSendRoomCommand()) {
+        socket.emit('joinRoom', { code: inviteCode, name: myName });
+      }
+    }
+    syncComfortMode();
+    refreshInputAvailability();
+    return;
+  }
+
+  // A restore that already has a room must consume any pending invite so a
+  // later roomless transition cannot unexpectedly join an old link.
+  autoJoinRoomCode = null;
+  myRoomCode = code;
+  roomHostId = snapshot.hostId || null;
+  isHost = !!myPlayerId && roomHostId === myPlayerId;
+  roomCategories = {
+    noun_adj_verb: true,
+    countries: true,
+    us_states: true,
+    us_cities: true,
+    ...(snapshot.categories || {})
+  };
+  setRoster(snapshot.players, snapshot.hostId || null);
+
+  if (snapshot.state === 'lobby') {
+    resetGamePhaseForLobby();
+    renderRoomLobby();
+    showScreen('roomLobbyScreen', true);
+  } else if (snapshot.state === 'playing' && snapshot.roundStart) {
+    applyRoundStart(snapshot.roundStart, {
+      restore: true,
+      ownSubmission: snapshot.ownSubmission
+    });
+  } else if (snapshot.state === 'paused' && snapshot.lastRoundEnd) {
+    applyRoundEnd(snapshot.lastRoundEnd, { restore: true });
+  } else if (snapshot.state === 'finished' && snapshot.gameEnd) {
+    applyGameEnd(snapshot.gameEnd, {
+      restore: true,
+      voterIds: snapshot.playAgainVoterIds
+    });
+  } else {
+    resetGamePhaseForLobby();
+    renderRoomLobby();
+    showScreen('roomLobbyScreen', true);
+  }
+  syncComfortMode();
+  refreshInputAvailability();
+}
+
 
 // === Reaction emoji system ===
 document.querySelectorAll('.reaction-btn').forEach(btn => {
@@ -601,7 +1166,7 @@ document.querySelectorAll('.reaction-btn').forEach(btn => {
     const x = rect.left + rect.width / 2 - 12;
     const y = rect.top - 10;
     showFloatingReaction(emoji, x, y);
-    socket.emit('sendReaction', emoji);
+    emitIfConnected('sendReaction', emoji);
   });
 });
 
@@ -645,7 +1210,7 @@ function openChallengeSendModal(targetId, targetName) {
   $('challengeModalTimer').style.display = 'none';
 
   $('sendChallengeBtn').addEventListener('click', () => {
-    socket.emit('challengePlayer', { targetId, categories: challengeCategories });
+    if (!emitRoomCommand('challengePlayer', { targetId, categories: challengeCategories })) return;
     closeChallengeModal();
     showToast(`Challenge sent to ${targetName}`);
   });
@@ -678,13 +1243,13 @@ function openChallengeReceiveModal(challengerId, challengerName, categories) {
 
   $('acceptChallengeBtn').addEventListener('click', () => {
     if (!pendingChallenge) return;
-    socket.emit('acceptChallenge', pendingChallenge.challengerId);
+    if (!emitRoomCommand('acceptChallenge', pendingChallenge.challengerId)) return;
     closeChallengeModal();
   });
 
   $('declineChallengeBtn').addEventListener('click', () => {
     if (!pendingChallenge) return;
-    socket.emit('declineChallenge', pendingChallenge.challengerId);
+    if (!emitRoomCommand('declineChallenge', pendingChallenge.challengerId)) return;
     closeChallengeModal();
   });
 
@@ -757,7 +1322,7 @@ function clearChallengeState() {
 $('challengeModal').addEventListener('click', (e) => {
   if (e.target === $('challengeModal')) {
     if (pendingChallenge && pendingChallenge.mode === 'receive') {
-      socket.emit('declineChallenge', pendingChallenge.challengerId);
+      emitRoomCommand('declineChallenge', pendingChallenge.challengerId);
     }
     closeChallengeModal();
   }
@@ -777,18 +1342,21 @@ socket.on('challengeSent', (data) => {
 
 socket.on('challengeAccepted', (data) => {
   clearChallengeState();
-  myRoomCode = data.roomCode;
-  roomHostId = data.hostId;
-  isHost = (data.hostId === myPlayerId);
-  players = (data.players || []).map(p => ({ ...p }));
-  roomCategories = data.categories || { ...roomCategories };
+  applyRoomEntry({
+    code: data.roomCode || data.code,
+    hostId: data.hostId,
+    players: data.players,
+    categories: data.categories,
+    maxPlayers: data.maxPlayers,
+    matchId: data.matchId
+  });
 });
 
 socket.on('challengeDeclined', (data) => {
   clearChallengeState();
   closeChallengeModal();
   showToast(`${data.targetName} declined your challenge`);
-  socket.emit('requestOnlinePlayers');
+  emitIfConnected('requestOnlinePlayers');
 });
 
 socket.on('challengeExpired', (data) => {
@@ -797,7 +1365,7 @@ socket.on('challengeExpired', (data) => {
   if (data.targetName) {
     showToast(`Challenge to ${data.targetName} expired`);
   }
-  socket.emit('requestOnlinePlayers');
+  emitIfConnected('requestOnlinePlayers');
 });
 
 socket.on('challengeCancelled', (data) => {
@@ -806,31 +1374,62 @@ socket.on('challengeCancelled', (data) => {
   if (data.challengerName) {
     showToast(`${data.challengerName} cancelled the challenge`);
   }
-  socket.emit('requestOnlinePlayers');
+  emitIfConnected('requestOnlinePlayers');
 });
 
 loadWordLookup();
 loadWordCategories();
 
 // === Name screen ===
-$('enterLobbyBtn').addEventListener('click', () => {
+// An explicit name submission starts (or re-registers) a session. It is never
+// sent automatically as a RESUME_IN_USE fallback: when another tab owns the
+// token, the user must deliberately choose "play as a new player" here.
+function startExplicitNewSession(name) {
+  storeResumeToken(null);
+  cancelResumeRetry();
+  sessionExpiredHandled = false;
+  resumeConflict = false;
+  resumeNoticeShown = false;
+  registrationPending = true;
+  authoritativeReady = false;
+  myName = name;
+  setEnterButtonLabel(false);
+
+  if (!socket.connected) {
+    socket.connect();
+  } else {
+    socket.emit('setName', name);
+  }
+}
+
+function submitNameFromInput() {
   const name = $('playerNameInput').value.trim();
   if (!name) {
     showError('Please enter your name', 'nameError');
     return;
   }
+
+  if (resumeConflict) {
+    startExplicitNewSession(name);
+    showToast('Starting a new player session');
+    return;
+  }
+
   myName = name;
+  if (!socket.connected) {
+    registrationPending = true;
+    socket.connect();
+    return;
+  }
+  registrationPending = true;
+  authoritativeReady = false;
   socket.emit('setName', name);
-});
+}
+
+$('enterLobbyBtn').addEventListener('click', submitNameFromInput);
 
 $('playerNameInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    const name = $('playerNameInput').value.trim();
-    if (name) {
-      myName = name;
-      socket.emit('setName', name);
-    }
-  }
+  if (e.key === 'Enter') submitNameFromInput();
 });
 
 $('editNameBtn').addEventListener('click', () => {
@@ -839,13 +1438,13 @@ $('editNameBtn').addEventListener('click', () => {
 });
 
 $('refreshLobbyBtn').addEventListener('click', () => {
-  socket.emit('requestOnlinePlayers');
+  emitIfConnected('requestOnlinePlayers');
 });
 
 // === Room buttons ===
 $('createRoomBtn').addEventListener('click', () => {
   if (!myName) return;
-  socket.emit('createRoom', myName);
+  emitRoomCommand('createRoom', myName);
 });
 
 $('joinRoomInput').addEventListener('input', (e) => {
@@ -859,7 +1458,7 @@ $('joinRoomBtn').addEventListener('click', () => {
     return;
   }
   if (!myName) return;
-  socket.emit('joinRoom', { code, name: myName });
+  emitRoomCommand('joinRoom', { code, name: myName });
 });
 
 $('joinRoomInput').addEventListener('keydown', (e) => {
@@ -869,17 +1468,16 @@ $('joinRoomInput').addEventListener('keydown', (e) => {
 });
 
 $('readyUpLobbyBtn').addEventListener('click', () => {
-  sfxReady();
   const me = players.find(p => p.id === myPlayerId);
-  if (me && !me.ready) {
-    me.ready = true;
-    renderRoomLobby();
-    socket.emit('readyUp');
-  }
+  if (!me || me.ready) return;
+  if (!emitRoomCommand('readyUp')) return;
+  sfxReady();
+  me.ready = true;
+  renderRoomLobby();
 });
 
 $('startGameBtn').addEventListener('click', () => {
-  socket.emit('startGame');
+  emitRoomCommand('startGame');
 });
 
 // Category toggle click handler
@@ -889,13 +1487,19 @@ $('categoryTogglesRow').addEventListener('click', (e) => {
   if (!isHost) return;
   const cat = btn.dataset.category;
   if (!cat || typeof roomCategories[cat] === 'undefined') return;
+  if (!canSendRoomCommand()) {
+    showToast('Still reconnecting — try again in a moment');
+    return;
+  }
   roomCategories[cat] = !roomCategories[cat];
   renderCategoryToggles();
   socket.emit('updateCategories', roomCategories);
 });
 
+// Explicit leave: do not clear the local room until the server acknowledges
+// with roomLeft. Unload/pagehide never emits this.
 $('leaveRoomLobbyBtn').addEventListener('click', () => {
-  socket.emit('leaveRoom');
+  emitRoomCommand('leaveRoom');
 });
 
 $('copyRoomCodeBtn').addEventListener('click', () => {
@@ -911,55 +1515,295 @@ $('copyInviteLinkBtn').addEventListener('click', () => {
   }
 });
 
-// === Word input ===
-$('wordInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !submitted) {
-    const word = $('wordInput').value.trim();
-    if (word) {
-      const result = validateClientWord(word, currentStartLetter, currentEndLetter);
-      if (!result.valid) {
-        sfxInvalid();
-        $('wordInput').classList.add('invalid-input');
-        $('wordInput').placeholder = result.reason;
-        announceAlert(result.reason);
-        setTimeout(() => {
-          $('wordInput').classList.remove('invalid-input');
-          $('wordInput').placeholder = 'TYPE A WORD...';
-        }, 1000);
-        return;
-      }
-      submitted = true;
-      sfxSubmit();
-      $('wordInput').disabled = true;
-      $('wordInput').classList.add('submitted-flash');
-      setTimeout(() => $('wordInput').classList.remove('submitted-flash'), 600);
-      if (!comfortPrefs.motionOff) {
-        $('tile1').classList.add('glow-burst');
-        $('tile2').classList.add('glow-burst');
-        setTimeout(() => {
-          $('tile1').classList.remove('glow-burst');
-          $('tile2').classList.remove('glow-burst');
-        }, 600);
-      }
-      socket.emit('submitWord', word);
-      announce(`Word submitted: ${word}. Waiting for round to end.`);
+// === Word input — on-screen keyboard, hardware typing, validation ===
+const WORD_DEFAULT_FEEDBACK = 'Tap or type · ⌫ delete · Enter submit';
+
+function isEditableElement(el) {
+  return el instanceof Element &&
+    !!el.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
+}
+
+function isGameScreenActive() {
+  return $('gameScreen').classList.contains('active') &&
+    !document.querySelector('.modal-overlay.active');
+}
+
+function isWordInputOpen() {
+  return isGameScreenActive() &&
+    socket.connected &&
+    !browserOffline &&
+    authoritativeReady &&
+    !!myPlayerId &&
+    !submitted &&
+    !!roundDeadline &&
+    serverNow() < roundDeadline;
+}
+
+function setWordFeedback(message, state = '') {
+  const el = $('wordFeedback');
+  if (!el) return;
+  if (el.textContent !== message) el.textContent = message;
+  el.classList.toggle('feedback-error', state === 'error');
+  el.classList.toggle('feedback-success', state === 'success');
+}
+
+function renderWordDisplay() {
+  const display = $('wordDisplay');
+  const value = $('wordDisplayValue');
+  const announceEl = $('wordDisplayAnnounce');
+  if (!display || !value) return;
+
+  const hasWord = currentWord.length > 0;
+  display.classList.toggle('empty', !hasWord);
+  display.classList.toggle('submitted', submitted);
+  value.textContent = hasWord
+    ? currentWord
+    : (submitted ? 'WAITING…' : 'TAP OR TYPE');
+
+  if (announceEl) {
+    if (submitted) {
+      announceEl.textContent = 'Word submitted. Waiting for the round to end.';
+    } else if (hasWord) {
+      announceEl.textContent = `Current word: ${currentWord.split('').join(' ')}. ${currentWord.length} ${currentWord.length === 1 ? 'letter' : 'letters'}.`;
+    } else {
+      announceEl.textContent = 'No letters entered.';
     }
   }
+}
+
+function setKeyboardEnabled(enabled) {
+  document.querySelectorAll('#gameKeyboard .word-key').forEach(btn => {
+    btn.disabled = !enabled;
+  });
+  const submitBtn = $('submitWordBtn');
+  if (submitBtn) submitBtn.disabled = !enabled;
+}
+
+function resetWordEntry() {
+  currentWord = '';
+  submitted = false;
+  const display = $('wordDisplay');
+  if (display) display.classList.remove('submitted', 'invalid');
+  setKeyboardEnabled(true);
+  setWordFeedback(WORD_DEFAULT_FEEDBACK);
+  renderWordDisplay();
+}
+
+function appendWordText(text) {
+  if (!isWordInputOpen()) return;
+  const cleaned = String(text || '').toUpperCase().replace(/[^A-Z-]/g, '');
+  if (!cleaned) return;
+
+  const remaining = WORD_MAX_LENGTH - currentWord.length;
+  currentWord += cleaned.slice(0, remaining);
+  const display = $('wordDisplay');
+  if (display) display.classList.remove('invalid');
+
+  if (cleaned.length > remaining) {
+    setWordFeedback(`Maximum ${WORD_MAX_LENGTH} characters`, 'error');
+  } else {
+    setWordFeedback(WORD_DEFAULT_FEEDBACK);
+  }
+  renderWordDisplay();
+}
+
+function appendLetter(letter) {
+  appendWordText(letter);
+}
+
+function deleteLastLetter() {
+  if (!isWordInputOpen() || currentWord.length === 0) return;
+  currentWord = currentWord.slice(0, -1);
+  const display = $('wordDisplay');
+  if (display) display.classList.remove('invalid');
+  setWordFeedback(WORD_DEFAULT_FEEDBACK);
+  renderWordDisplay();
+}
+
+function handleWordSubmit() {
+  if (!isGameScreenActive() || submitted) return;
+
+  // No offline replay: a submission typed while the transport or restore is
+  // not ready is dropped, not buffered for later.
+  if (!socket.connected || browserOffline || !authoritativeReady) {
+    setWordFeedback(browserOffline ? 'Offline' : 'Reconnecting…', 'error');
+    showToast(browserOffline
+      ? 'You are offline — try again when the connection returns'
+      : 'Still reconnecting — try again in a moment');
+    return;
+  }
+
+  if (!roundDeadline || serverNow() >= roundDeadline) {
+    setWordFeedback("Time's up", 'error');
+    setKeyboardEnabled(false);
+    return;
+  }
+
+  const word = currentWord.toLowerCase();
+  if (!word) {
+    setWordFeedback('Type a word first', 'error');
+    announceAlert('Type a word first');
+    return;
+  }
+
+  const result = validateClientWord(word, currentStartLetter, currentEndLetter);
+  if (!result.valid) {
+    sfxInvalid();
+    const display = $('wordDisplay');
+    if (display) display.classList.add('invalid');
+    setWordFeedback(result.reason, 'error');
+    announceAlert(result.reason);
+    setTimeout(() => {
+      if (!submitted && display) display.classList.remove('invalid');
+    }, 1000);
+    return;
+  }
+
+  submitted = true;
+  sfxSubmit();
+  setKeyboardEnabled(false);
+  renderWordDisplay();
+  setWordFeedback('Word sent. Waiting for the round to end.', 'success');
+  focusWordDisplay();
+
+  if (!comfortPrefs.motionOff) {
+    $('tile1').classList.add('glow-burst');
+    $('tile2').classList.add('glow-burst');
+    setTimeout(() => {
+      $('tile1').classList.remove('glow-burst');
+      $('tile2').classList.remove('glow-burst');
+    }, 600);
+  }
+  socket.emit('submitWord', {
+    word,
+    matchId: currentMatchId,
+    round: currentRound
+  });
+  announce(`Word submitted: ${word}. Waiting for round to end.`);
+}
+
+function focusWordDisplay(delay = 0) {
+  const doFocus = () => {
+    if (!isGameScreenActive()) return;
+    const display = $('wordDisplay');
+    if (display) display.focus({ preventScroll: true });
+  };
+  if (delay > 0) setTimeout(doFocus, delay);
+  else doFocus();
+}
+
+// On-screen keyboard buttons — data-key letters/hyphen, data-action backspace.
+// A real pointer tap focuses the button. After acting on it, hand focus back to
+// the non-editable answer display so hardware Enter submits instead of
+// re-activating the last letter. Keyboard/AT activation (detail 0, no pointer
+// origin) deliberately keeps focus on the button for accessible semantics.
+let pointerActivatedKey = null;
+let pointerActivationTimer = null;
+
+$('gameKeyboard').addEventListener('pointerdown', (e) => {
+  const key = e.target.closest('.word-key');
+  if (!key || key.disabled) return;
+  pointerActivatedKey = key;
+  clearTimeout(pointerActivationTimer);
+  pointerActivationTimer = setTimeout(() => {
+    pointerActivatedKey = null;
+  }, 700);
 });
+
+$('gameKeyboard').addEventListener('pointercancel', () => {
+  pointerActivatedKey = null;
+  clearTimeout(pointerActivationTimer);
+});
+
+$('gameKeyboard').addEventListener('click', (e) => {
+  const key = e.target.closest('.word-key');
+  if (!key || key.disabled) return;
+
+  const pointerOrigin = pointerActivatedKey === key && e.detail > 0;
+  pointerActivatedKey = null;
+  clearTimeout(pointerActivationTimer);
+
+  if (key.dataset.action === 'backspace') {
+    deleteLastLetter();
+  } else if (key.dataset.key) {
+    appendLetter(key.dataset.key);
+  }
+
+  if (pointerOrigin) focusWordDisplay();
+});
+
+$('submitWordBtn').addEventListener('click', handleWordSubmit);
+
+// Hardware keyboards: type letters, hyphen, Delete/Backspace, Enter.
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+  if (!isGameScreenActive() || submitted) return;
+  if (isEditableElement(e.target)) return;
+
+  const targetIsAction = e.target instanceof Element &&
+    !!e.target.closest('button, a, [role="button"]');
+
+  if (e.key === 'Enter') {
+    // Let a focused button activate natively; don't double-submit.
+    if (targetIsAction) return;
+    e.preventDefault();
+    handleWordSubmit();
+    return;
+  }
+
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    e.preventDefault();
+    deleteLastLetter();
+    return;
+  }
+
+  if (e.key === ' ') {
+    if (targetIsAction) return;
+    e.preventDefault();
+    return;
+  }
+
+  if (/^[a-zA-Z-]$/.test(e.key)) {
+    e.preventDefault();
+    appendLetter(e.key);
+  }
+});
+
+// Preserve paste/desktop entry from the old textbox, restricted to the
+// dictionary alphabet (letters/hyphen) and the old 20-character cap.
+document.addEventListener('paste', (e) => {
+  if (!isWordInputOpen() || isEditableElement(e.target)) return;
+  const text = e.clipboardData ? e.clipboardData.getData('text') : '';
+  if (!text) return;
+  const cleaned = text.toUpperCase().replace(/[^A-Z-]/g, '');
+  if (!cleaned) return;
+  e.preventDefault();
+  appendWordText(cleaned);
+});
+
+// Keep the newest submission chip visible in the one-row status strip without
+// changing the strip's height (which would move the keyboard).
+const submissionsEl = $('submissionsStatus');
+if (submissionsEl && window.MutationObserver) {
+  new MutationObserver(() => {
+    requestAnimationFrame(() => {
+      submissionsEl.scrollLeft = submissionsEl.scrollWidth;
+    });
+  }).observe(submissionsEl, { childList: true });
+}
 
 // === End screen buttons ===
 let playAgainVoted = false;
 
 $('playAgainBtn').addEventListener('click', () => {
   if (playAgainVoted) return;
-  socket.emit('requestPlayAgain');
+  emitRoomCommand('requestPlayAgain');
 });
 
+// Explicit return-to-lobby also waits for the server's roomLeft ack. Unload
+// never calls this (it is a transport disconnect only).
 $('returnToLobbyBtn').addEventListener('click', () => {
-  socket.emit('returnToLobby');
-  resetRoomState();
-  showScreen('lobbyScreen');
-  socket.emit('requestOnlinePlayers');
+  emitRoomCommand('returnToLobby');
 });
 
 // === Profile modal handlers ===
@@ -1035,7 +1879,7 @@ document.addEventListener('keydown', (e) => {
     if ($('profileModal').classList.contains('active')) closeProfileModal();
     if ($('challengeModal').classList.contains('active')) {
       if (pendingChallenge && pendingChallenge.mode === 'receive') {
-        socket.emit('declineChallenge', pendingChallenge.challengerId);
+        emitRoomCommand('declineChallenge', pendingChallenge.challengerId);
       }
       closeChallengeModal();
     }
@@ -1078,7 +1922,9 @@ $('saveProfileBtn').addEventListener('click', () => {
     // Only when we've already entered the lobby — the server has a profile row.
     if (myPlayerId) {
       _renamingViaProfile = true;
-      socket.emit('editName', name);
+      if (!emitIfConnected('editName', name)) {
+        _renamingViaProfile = false;
+      }
     }
     showToast('Profile saved');
   }
@@ -1096,13 +1942,22 @@ function updateScoreHint() {
 updateScoreHint();
 
 // === Round / game events ===
+// nameConfirmed is identity/profile only. Screen routing is always driven by
+// the authoritative roomStateRestored snapshot that follows a registration or
+// resume, so a duplicate nameConfirmed (profile rename) can never eject a
+// restored player back to the lobby.
 socket.on('nameConfirmed', (data) => {
+  if (!data || !data.playerId) return;
   myPlayerId = data.playerId;
   myName = data.name;
 
-  // Sync comfort mode preference with server for round timing
-  if (comfortPrefs.enabled) {
-    socket.emit('setComfortMode', { enabled: true });
+  if (typeof data.resumeToken === 'string' && data.resumeToken) {
+    storeResumeToken(data.resumeToken);
+    registrationPending = false;
+    sessionExpiredHandled = false;
+    resumeConflict = false;
+    resumeNoticeShown = false;
+    cancelResumeRetry();
   }
 
   const existingProfile = loadProfile();
@@ -1123,28 +1978,13 @@ socket.on('nameConfirmed', (data) => {
     return;
   }
 
-  // Recovery safety: roomStateRestored has already re-placed us into an
-  // existing room/game/result view. Do NOT eject back to the lobby.
-  if (restoredIntoRoom) {
-    restoredIntoRoom = false;
-    const me = players.find(p => p.id === myPlayerId);
-    if (me && me.name !== myName) {
-      me.name = myName;
-      renderRoomLobby();
-    }
-    return;
+  const me = players.find(p => p.id === myPlayerId);
+  if (me && me.name !== myName) {
+    me.name = myName;
+    if (myRoomCode) renderRoomLobby();
   }
 
-  if (autoJoinRoomCode && myName) {
-    socket.emit('joinRoom', { code: autoJoinRoomCode, name: myName });
-    autoJoinRoomCode = null;
-  } else {
-    // Clear any stale room reference left over from a disconnect whose room no
-    // longer exists before returning to the lobby.
-    if (myRoomCode) resetRoomState();
-    showScreen('lobbyScreen');
-    socket.emit('requestOnlinePlayers');
-  }
+  syncComfortMode();
 });
 
 socket.on('onlinePlayers', (players) => {
@@ -1154,10 +1994,13 @@ socket.on('onlinePlayers', (players) => {
 socket.on('error', (data) => {
   if (data.code === 'category_mismatch' && submitted) {
     submitted = false;
-    $('wordInput').disabled = false;
-    $('wordInput').classList.remove('submitted-flash');
-    $('wordInput').focus();
-    $('wordInput').select();
+    setKeyboardEnabled(true);
+    const display = $('wordDisplay');
+    if (display) display.classList.remove('submitted');
+    renderWordDisplay();
+    setWordFeedback(data.message || 'Word not in selected categories', 'error');
+    announceAlert(data.message || 'Word not in selected categories');
+    focusWordDisplay();
   }
 
   const lobbyErr = $('lobbyError');
@@ -1174,101 +2017,100 @@ socket.on('error', (data) => {
 
 // === Room events ===
 socket.on('roomCreated', (data) => {
-  myRoomCode = data.code;
-  roomHostId = data.hostId;
-  isHost = true;
-  players = (data.players || []).map(p => ({ ...p }));
-  roomCategories = data.categories || { ...roomCategories };
-  renderRoomLobby();
-  showScreen('roomLobbyScreen');
+  applyRoomEntry(data);
 });
 
 socket.on('roomJoined', (data) => {
-  myRoomCode = data.code;
-  roomHostId = data.hostId;
-  isHost = (data.hostId === myPlayerId);
-  players = (data.players || []).map(p => ({ ...p }));
-  roomCategories = data.categories || { ...roomCategories };
-  renderRoomLobby();
-  showScreen('roomLobbyScreen');
+  applyRoomEntry(data);
 });
 
 socket.on('roomStateRestored', (data) => {
-  restoredIntoRoom = true;
-  myRoomCode = data.code;
-  roomHostId = data.hostId;
-  isHost = (data.hostId === myPlayerId);
-  players = (data.players || []).map(p => ({ ...p }));
-  roomCategories = data.categories || { ...roomCategories };
-  renderRoomLobby();
-  if (data.state === 'lobby') {
-    showScreen('roomLobbyScreen', true);
-  }
+  applyRoomStateSnapshot(data);
 });
 
 socket.on('playerJoined', (data) => {
-  const existing = players.find(p => p.id === data.player.id);
-  if (!existing) {
-    players.push({ ...data.player });
+  if (!data) return;
+  if (Array.isArray(data.players)) {
+    setRoster(data.players, data.hostId);
+  } else if (data.player && data.player.id) {
+    const incoming = normalizePlayers([data.player])[0];
+    const existing = players.find(p => p.id === incoming.id);
+    if (existing) Object.assign(existing, incoming);
+    else players.push(incoming);
+    if (data.hostId !== undefined && data.hostId !== null) roomHostId = data.hostId;
+    isHost = !!myPlayerId && roomHostId === myPlayerId;
+    disconnectPlayers.delete(incoming.id);
+    renderDisconnectBanner();
   }
   renderRoomLobby();
 });
 
-// Disconnect banner
-let _disconnectBanner = null;
-function _showDisconnectBanner(playerName) {
-  _hideDisconnectBanner();
-  const banner = document.createElement('div');
-  banner.id = 'disconnectBanner';
-  banner.className = 'disconnect-banner';
-  banner.setAttribute('role', 'alert');
-  banner.innerHTML = `<span class="disconnect-banner-icon" aria-hidden="true">!</span><span>${escapeHtml(playerName || 'Opponent')} disconnected. Waiting to reconnect.</span>`;
-  document.body.appendChild(banner);
-  announceAlert(`${playerName || 'Opponent'} disconnected`);
-}
-function _hideDisconnectBanner() {
-  const el = document.getElementById('disconnectBanner');
-  if (el) el.remove();
-  _disconnectBanner = null;
-}
-
 socket.on('opponentDisconnected', (data) => {
-  _showDisconnectBanner(data.playerName || 'Opponent');
+  if (!data) return;
+  if (Array.isArray(data.players)) setRoster(data.players, data.hostId);
+  if (data.playerId) {
+    disconnectPlayers.set(data.playerId, data.playerName || 'Player');
+  } else if (data.playerName) {
+    disconnectPlayers.set('name:' + data.playerName, data.playerName);
+  }
+  renderDisconnectBanner();
+  renderRoomLobby();
+  recomputeFinishedRematch();
 });
 
 socket.on('playerRejoined', (data) => {
-  _hideDisconnectBanner();
-  players = (data.players || []).map(p => ({ ...p }));
-  roomHostId = data.hostId;
-  isHost = (roomHostId === myPlayerId);
+  if (!data) return;
+  if (Array.isArray(data.players)) setRoster(data.players, data.hostId);
+  if (data.playerId) disconnectPlayers.delete(data.playerId);
+  renderDisconnectBanner();
   renderRoomLobby();
+  recomputeFinishedRematch();
 });
 
 socket.on('playerUpdated', (data) => {
-  players = (data.players || []).map(p => ({ ...p }));
-  roomHostId = data.hostId;
-  isHost = (roomHostId === myPlayerId);
+  if (!data) return;
+  if (Array.isArray(data.players)) {
+    setRoster(data.players, data.hostId);
+  } else if (data.playerId) {
+    const player = players.find(p => p.id === data.playerId);
+    if (player && data.name) player.name = data.name;
+    if (data.hostId !== undefined && data.hostId !== null) roomHostId = data.hostId;
+    isHost = !!myPlayerId && roomHostId === myPlayerId;
+  }
+  const me = players.find(p => p.id === myPlayerId);
+  if (me && me.name) myName = me.name;
   renderRoomLobby();
+  recomputeFinishedRematch();
 });
 
 socket.on('playerLobbyReady', (data) => {
-  const p = players.find(p => p.id === data.playerId);
-  if (p) {
-    p.ready = true;
+  if (!data) return;
+  if (Array.isArray(data.players)) {
+    setRoster(data.players, data.hostId);
+  } else {
+    const p = players.find(player => player.id === data.playerId);
+    if (p) p.ready = true;
   }
   renderRoomLobby();
 });
 
 socket.on('playerLeft', (data) => {
-  players = (data.players || []).map(p => ({ ...p }));
-  roomHostId = data.hostId;
-  isHost = (roomHostId === myPlayerId);
+  if (!data) return;
+  if (Array.isArray(data.players)) {
+    setRoster(data.players, data.hostId);
+  } else {
+    players = players.filter(p => p.id !== data.playerId);
+    if (data.hostId !== undefined && data.hostId !== null) roomHostId = data.hostId;
+    isHost = !!myPlayerId && roomHostId === myPlayerId;
+  }
+  if (data.playerId) disconnectPlayers.delete(data.playerId);
+  renderDisconnectBanner();
 
   if (!players.find(p => p.id === myPlayerId)) {
-    _hideDisconnectBanner();
+    hideDisconnectBanners();
     resetRoomState();
-    showScreen('lobbyScreen');
-    socket.emit('requestOnlinePlayers');
+    showScreen('lobbyScreen', true);
+    emitIfConnected('requestOnlinePlayers');
     return;
   }
 
@@ -1282,28 +2124,50 @@ socket.on('playerLeft', (data) => {
     showToast('A player left the room');
   }
   renderRoomLobby();
+  recomputeFinishedRematch();
 });
 
 socket.on('roomLeft', () => {
-  _hideDisconnectBanner();
+  // Only a server ack clears the local room. Explicit leave / return-to-lobby
+  // never mutate room state optimistically.
+  authoritativeReady = true;
+  hideDisconnectBanners();
   resetRoomState();
-  showScreen('lobbyScreen');
-  socket.emit('requestOnlinePlayers');
+  showScreen('lobbyScreen', true);
+  emitIfConnected('requestOnlinePlayers');
 });
 
-socket.on('roundStart', (data) => {
+// A live roundStart and a restored snapshot roundStart share one renderer so
+// a refresh cannot reset first-round scores or lose the cached duration.
+function applyRoundStart(data, options = {}) {
+  if (!data) return;
+  const restore = !!options.restore;
+  const ownSubmission = options.ownSubmission || null;
+  // A transport reconnect re-sends the same active round. Do not discard a
+  // partially typed answer unless the match/round actually changed.
+  const previousWord = currentWord;
+  const previousRound = currentRound;
+  const previousMatchId = currentMatchId;
+  const previousSubmitted = submitted;
+
+  stopPhaseTimers();
   currentRound = data.round;
   totalRounds = data.totalRounds || 10;
-  roundDeadline = data.deadline;
+  roundDeadline = data.deadline || (serverNow() + (Number(data.timeLeft) || 10) * 1000);
   currentStartLetter = data.startLetter;
   currentEndLetter = data.endLetter;
-  // Authoritative round duration from the server (defaults to 10s for
-  // safety, but comfort rooms send 15s).
+  // timeLeft is the ORIGINAL round duration, not the remaining time.
   const roundSeconds = Number(data.timeLeft) || 10;
   currentRoundDuration = roundSeconds * 1000;
+  if (data.matchId !== undefined && data.matchId !== null) currentMatchId = data.matchId;
+
   submitted = false;
-  // Reset live scores for the new game (only on first round)
-  if (data.round === 1) {
+  playAgainVoted = false;
+  finishedGameEnd = null;
+  finishedVoterIds = [];
+  // Reset live scores only on a live first round. Restoring round 1 must keep
+  // the authoritative roster score from before the refresh.
+  if (!restore && data.round === 1) {
     roundScores = { me: 0, opp: 0 };
   }
 
@@ -1321,24 +2185,82 @@ socket.on('roundStart', (data) => {
   const pairAnnounce = $('tilePairAnnounce');
   if (pairAnnounce) pairAnnounce.textContent = `Start letter ${data.startLetter}, end letter ${data.endLetter}`;
 
-  $('wordInput').value = '';
-  $('wordInput').disabled = false;
-  $('wordInput').classList.remove('invalid-input');
-  $('wordInput').placeholder = 'TYPE A WORD...';
-  $('wordInput').focus();
+  // Close any OS keyboard left open from a lobby text field before the game
+  // surface takes over. The answer display is deliberately not editable.
+  if (document.activeElement instanceof Element && isEditableElement(document.activeElement)) {
+    document.activeElement.blur();
+  }
+  resetWordEntry();
   $('submissionsStatus').innerHTML = '';
+
+  if (restore) {
+    renderSubmissionChipsFromRoster();
+    if (ownSubmission && typeof ownSubmission === 'object') {
+      submitted = true;
+      currentWord = String(ownSubmission.word || '').toUpperCase();
+      const display = $('wordDisplay');
+      if (display) display.classList.add('submitted');
+      renderWordDisplay();
+      setKeyboardEnabled(false);
+      setWordFeedback('Word sent. Waiting for the round to end.', 'success');
+    } else {
+      const me = players.find(p => p.id === myPlayerId);
+      if (me && me.submitted) {
+        submitted = true;
+        setKeyboardEnabled(false);
+        renderWordDisplay();
+        setWordFeedback('Word sent. Waiting for the round to end.', 'success');
+      }
+    }
+    syncScoresFromRoster();
+  }
+
+  const sameActiveRound = restore &&
+    !previousSubmitted &&
+    !!previousWord &&
+    data.matchId !== undefined &&
+    data.matchId !== null &&
+    previousMatchId !== null &&
+    previousMatchId !== undefined &&
+    String(previousMatchId) === String(data.matchId) &&
+    previousRound === data.round;
+  if (sameActiveRound && !submitted && !ownSubmission && serverNow() < roundDeadline) {
+    currentWord = previousWord.slice(0, WORD_MAX_LENGTH);
+    renderWordDisplay();
+    setWordFeedback(WORD_DEFAULT_FEEDBACK);
+  }
   updateScoreHint();
 
-  showScreen('gameScreen');
-  showRoundBanner('ROUND ' + data.round);
-  sfxRoundStart();
-  // Polite live-region announcement for screen readers
-  announce(`Round ${data.round} of ${totalRounds}. Type a word starting with ${data.startLetter} ending with ${data.endLetter}. ${roundSeconds} seconds.`);
+  if (restore) {
+    showScreen('gameScreen', true);
+    focusWordDisplay(60);
+    announce(`Reconnected. Round ${data.round} of ${totalRounds}. Type a word starting with ${data.startLetter} ending with ${data.endLetter}.`);
+  } else {
+    showScreen('gameScreen');
+    showRoundBanner('ROUND ' + data.round);
+    sfxRoundStart();
+    // Focus after the screen transition so screen readers land on the word
+    // display (a div, never a native input).
+    focusWordDisplay(450);
+    announce(`Round ${data.round} of ${totalRounds}. Type a word starting with ${data.startLetter} ending with ${data.endLetter}. ${roundSeconds} seconds.`);
+  }
+
   startTimer();
+  refreshInputAvailability();
+  // The animated screen transition keeps #gameScreen from being .active until
+  // its exit animation completes; re-evaluate once the new screen is live.
+  setTimeout(refreshInputAvailability, 460);
+}
+
+socket.on('roundStart', (data) => {
+  applyRoundStart(data);
 });
 
 socket.on('playerSubmitted', (data) => {
+  if (!data) return;
   if (data.playerId === myPlayerId) return;
+  const rosterPlayer = players.find(player => player.id === data.playerId);
+  if (rosterPlayer) rosterPlayer.submitted = true;
   const container = $('submissionsStatus');
   if (!container) return;
   if (container.querySelector(`[data-pid="${data.playerId}"]`)) return;
@@ -1352,11 +2274,19 @@ socket.on('playerSubmitted', (data) => {
   announceAlert(`${data.playerName} submitted a word`);
 });
 
-socket.on('roundEnd', (data) => {
-  clearInterval(timerInterval);
-  $('timerBar').classList.remove('critical');
-  $('gameScreen').classList.remove('screen-critical');
-  document.body.classList.remove('timer-critical');
+function applyRoundEnd(data, options = {}) {
+  if (!data || !Array.isArray(data.results)) return;
+  const restore = !!options.restore;
+  stopPhaseTimers();
+  roundDeadline = null;
+  currentRound = data.round || currentRound;
+  playAgainVoted = false;
+  finishedGameEnd = null;
+  finishedVoterIds = [];
+  if (Array.isArray(data.pair) && data.pair.length >= 2) {
+    currentStartLetter = String(data.pair[0]).toUpperCase();
+    currentEndLetter = String(data.pair[1]).toUpperCase();
+  }
 
   $('resultRound').textContent = data.round;
 
@@ -1378,6 +2308,15 @@ socket.on('roundEnd', (data) => {
     .filter(r => r.playerId !== myPlayerId)
     .reduce((sum, r) => sum + (r.totalScore || 0), 0);
   roundScores.opp = oppTotal;
+  // Keep the lobby roster authoritative for later snapshot-style reads and
+  // for a refresh that happens between rounds.
+  for (const result of data.results) {
+    const rosterPlayer = players.find(player => player.id === result.playerId);
+    if (rosterPlayer) {
+      rosterPlayer.score = result.totalScore || 0;
+      rosterPlayer.submitted = false;
+    }
+  }
   updateScoreHint();
 
   // Result cards — every result carries explicit status text, not color-only
@@ -1464,7 +2403,8 @@ socket.on('roundEnd', (data) => {
     advIndicator.style.animation = '';
   }
 
-  showScreen('resultScreen');
+  showScreen('resultScreen', restore);
+  renderDisconnectBanner();
 
   // Build an accessible summary of the round
   const meLine = meResult
@@ -1474,14 +2414,66 @@ socket.on('roundEnd', (data) => {
     ? (roundWinnerIds[0] === myPlayerId ? 'You won this round.' : `${escapeHtml((data.results.find(r => r.playerId === roundWinnerIds[0]) || {}).name || 'Someone')} won this round.`)
     : (roundWinnerIds.length > 1 ? 'This round was a tie.' : '');
   announce(`Round ${data.round} results. ${winnerLine} ${meLine}`);
+}
+
+socket.on('roundEnd', (data) => {
+  applyRoundEnd(data);
 });
 
-socket.on('gameEnd', (data) => {
-  _hideDisconnectBanner();
-  clearInterval(timerInterval);
-  $('timerBar').classList.remove('critical');
-  $('gameScreen').classList.remove('screen-critical');
-  document.body.classList.remove('timer-critical');
+function canRematchFromRoster() {
+  return players.length >= 2 && players.every(player => player.connected !== false);
+}
+
+function renderRematchButton(canPlayAgain, expectedPlayerCount) {
+  const button = $('playAgainBtn');
+  if (!button || !finishedGameEnd) return;
+
+  if (!canPlayAgain) {
+    // Keep the stored vote/voter ids untouched; only the action is unavailable
+    // while the finished room does not have enough connected players.
+    button.style.display = 'none';
+    button.disabled = true;
+    button.textContent = 'PLAY AGAIN';
+    return;
+  }
+
+  const playerCount = Number.isFinite(expectedPlayerCount) && expectedPlayerCount > 0
+    ? expectedPlayerCount
+    : players.length;
+  const voteCount = finishedVoterIds.length;
+
+  button.style.display = 'inline-block';
+  if (voteCount > 0 && playerCount > 0 && voteCount >= playerCount) {
+    button.textContent = 'STARTING…';
+    button.disabled = true;
+    return;
+  }
+  if (playAgainVoted) {
+    button.textContent = 'READY ✓';
+    button.disabled = true;
+    return;
+  }
+  button.textContent = 'PLAY AGAIN';
+  button.disabled = false;
+}
+
+// Membership/connectivity changes in a finished room can change server
+// availability (canPlayAgain) after gameEnd was rendered. Reconcile the action
+// from the current roster while preserving the authoritative votes — never
+// re-run gameEnd rendering here.
+function recomputeFinishedRematch() {
+  if (!finishedGameEnd) return;
+  renderRematchButton(canRematchFromRoster());
+}
+
+function applyGameEnd(data, options = {}) {
+  if (!data) return;
+  const restore = !!options.restore;
+  const voterIds = Array.isArray(options.voterIds) ? options.voterIds : [];
+
+  stopPhaseTimers();
+  roundDeadline = null;
+  hideDisconnectBanners();
 
   const sortedRankings = [...(data.rankings || [])].sort((a, b) => b.score - a.score);
 
@@ -1512,7 +2504,7 @@ socket.on('gameEnd', (data) => {
   if (data.isTie) {
     winDisplay.textContent = 'Tie game';
     winDisplay.classList.add('tie');
-    sfxLose();
+    if (!restore) sfxLose();
   } else {
     const winner = (data.players || []).find(p => p.id === data.winnerId);
     const isWinner = data.winnerId === myPlayerId;
@@ -1523,45 +2515,53 @@ socket.on('gameEnd', (data) => {
     }
     if (isWinner && !data.forfeit) {
       winDisplay.classList.add('win');
-      sfxWin();
-      setTimeout(() => spawnConfetti(60), 400);
-    } else {
+      if (!restore) {
+        sfxWin();
+        setTimeout(() => spawnConfetti(60), 400);
+      }
+    } else if (!restore) {
       sfxLose();
     }
   }
 
-  playAgainVoted = false;
-  $('playAgainBtn').style.display = 'inline-block';
-  $('playAgainBtn').textContent = 'PLAY AGAIN';
-  $('playAgainBtn').disabled = false;
+  finishedGameEnd = data;
+  finishedVoterIds = [...voterIds];
+  playAgainVoted = !!(myPlayerId && voterIds.includes(myPlayerId));
+  renderRematchButton(data.canPlayAgain !== false);
 
-  showScreen('endScreen');
+  showScreen('endScreen', restore);
 
   // Final standings announcement
   const standingLines = sortedRankings.map((r, i) => `${i + 1}. ${escapeHtml(r.name)} — ${r.score} points`).join('. ');
   announce(`Game over. Final standings: ${standingLines}. ${winDisplay.textContent}`);
+}
+
+socket.on('gameEnd', (data) => {
+  applyGameEnd(data);
 });
 
-socket.on('playAgainVote', ({ voteCount, playerCount, votedId }) => {
-  const btn = $('playAgainBtn');
-  if (!btn) return;
-
-  if (votedId === myPlayerId) {
+socket.on('playAgainVote', (data) => {
+  if (!data) return;
+  const { playerCount, votedId, voterIds } = data;
+  if (Array.isArray(voterIds)) {
+    finishedVoterIds = [...voterIds];
+  } else if (votedId && !finishedVoterIds.includes(votedId)) {
+    finishedVoterIds.push(votedId);
+  }
+  if (votedId === myPlayerId ||
+      (myPlayerId && finishedVoterIds.includes(myPlayerId))) {
     playAgainVoted = true;
-    btn.textContent = 'READY ✓';
-    btn.disabled = true;
   }
-
-  if (voteCount >= playerCount) {
-    btn.textContent = 'STARTING…';
-    btn.disabled = true;
-  } else if (voteCount > 0 && votedId !== myPlayerId) {
-    btn.textContent = playAgainVoted ? 'READY ✓' : 'PLAY AGAIN';
-  }
+  if (!finishedGameEnd) return;
+  // Record votes even while the button is temporarily hidden, then reconcile
+  // the action. Never reset the local own-vote flag from a membership change.
+  renderRematchButton(canRematchFromRoster(), playerCount);
 });
 
 socket.on('gameReset', (data) => {
-  _hideDisconnectBanner();
+  if (!data) return;
+  stopPhaseTimers();
+  hideDisconnectBanners();
   if ($('resultCards')) $('resultCards').innerHTML = '';
   if ($('resultScores')) $('resultScores').innerHTML = '';
   if ($('examplesContainer')) $('examplesContainer').innerHTML = '';
@@ -1571,19 +2571,27 @@ socket.on('gameReset', (data) => {
     $('winnerDisplay').classList.remove('win', 'tie');
   }
 
-  players = (data.players || []).map(p => ({ ...p }));
-  roomHostId = data.hostId;
-  isHost = (roomHostId === myPlayerId);
-  roomCategories = data.categories || { ...roomCategories };
+  if (data.code) myRoomCode = data.code;
+  if (Array.isArray(data.players)) {
+    setRoster(data.players, data.hostId);
+  } else {
+    if (data.hostId !== undefined && data.hostId !== null) roomHostId = data.hostId;
+    isHost = !!myPlayerId && roomHostId === myPlayerId;
+  }
+  if (data.categories) roomCategories = { ...data.categories };
   playAgainVoted = false;
+  finishedGameEnd = null;
+  finishedVoterIds = [];
   currentRound = 0;
   roundDeadline = null;
   currentStartLetter = null;
   currentEndLetter = null;
+  currentMatchId = null;
   submitted = false;
+  currentWord = '';
   roundScores = { me: 0, opp: 0 };
   updateScoreHint();
-  clearInterval(timerInterval);
+  resetWordEntry();
 
   renderRoomLobby();
   showScreen('roomLobbyScreen', true);
@@ -1598,9 +2606,12 @@ socket.on('categoriesUpdated', (data) => {
 });
 
 socket.on('comfortModeUpdated', (data) => {
-  const p = players.find(p => p.id === data.playerId);
-  if (p) {
-    p.comfortMode = data.comfortMode;
+  if (!data) return;
+  if (Array.isArray(data.players)) {
+    setRoster(data.players, data.hostId);
+  } else {
+    const p = players.find(player => player.id === data.playerId);
+    if (p) p.comfortMode = data.comfortMode;
   }
   renderRoomLobby();
 });
@@ -1615,7 +2626,7 @@ function startTimer() {
   lastTimerAnnounceSecond = -1;
 
   function updateTimer() {
-    const now = Date.now();
+    const now = serverNow();
     const totalTime = currentRoundDuration;
     const remaining = Math.max(0, roundDeadline - now);
     const secondsLeft = Math.ceil(remaining / 1000);
@@ -1660,6 +2671,12 @@ function startTimer() {
       $('timerBar').classList.remove('critical');
       $('gameScreen').classList.remove('screen-critical');
       document.body.classList.remove('timer-critical');
+      setKeyboardEnabled(false);
+      if (!submitted) {
+        const display = $('wordDisplay');
+        if (display) display.classList.remove('invalid');
+        setWordFeedback("Time's up", 'error');
+      }
       announce('Time up.');
     }
   }
