@@ -93,9 +93,10 @@ The fake-socket fixture drives the same authoritative flow as production:
 `roundStart`/`matchId`. Submit assertions check the full
 `{ word, matchId, round }` object. Shipped checks remain as documented in
 `tests/ui/README.md`: on-screen and hardware typing, validation, timer expiry,
-critical/Comfort/reduced-motion tiles, viewport and safe-area fit, and offline
-request blocking. Screenshots go to `screenshots/ui/` (gitignored); override
-with `UI_SCREENSHOT_DIR`.
+critical/Comfort/reduced-motion/high-contrast tiles (including the critical
+onset during the tile entrance), viewport and safe-area fit with real 2- and
+8-player rosters, and offline request blocking. Screenshots go to
+`screenshots/ui/` (gitignored); override with `UI_SCREENSHOT_DIR`.
 
 ## Server tests (`tests/server*.test.js`)
 

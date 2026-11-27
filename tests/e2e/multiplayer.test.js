@@ -382,7 +382,11 @@ async function submitWord(page, word) {
 }
 
 async function reload(page) {
-  await page.goto(page.origin + '/');
+  // Preserve the current URL (including an invite ?room= parameter) so a
+  // reload actually exercises invite/lifecycle idempotence instead of a plain
+  // navigation to the root.
+  const currentUrl = await page.evaluate(() => location.href);
+  await page.goto(currentUrl);
   await page.waitForFunction(
     () => document.getElementById('wordDisplay') &&
       typeof socket !== 'undefined' &&
@@ -676,6 +680,7 @@ async function run() {
       const incumbent = await openClient(browser, server.origin, { name: 'TokenOwner' });
       let duplicate = null;
       try {
+        const code = await createRoom(incumbent);
         const incumbentState = await readClient(incumbent);
         const token = await incumbent.evaluate(() => sessionStorage.getItem('wb_resume_token'));
         assert.ok(token);
@@ -710,6 +715,9 @@ async function run() {
 
         const stillIncumbent = await readClient(incumbent);
         assert.equal(stillIncumbent.playerId, incumbentState.playerId, 'incumbent identity must survive');
+        assert.equal(stillIncumbent.code, code, 'incumbent room must not be disturbed');
+        assert.equal(stillIncumbent.hostId, incumbentState.playerId, 'incumbent must stay host');
+        assert.equal(stillIncumbent.players.length, 1, 'a rejected duplicate must not enter the room');
         assert.equal(
           await incumbent.evaluate(() => socket.connected),
           true,
@@ -736,6 +744,8 @@ async function run() {
         await incumbent.waitForTimeout(600);
         const after = await readClient(incumbent);
         assert.equal(after.playerId, incumbentState.playerId, 'incumbent must remain untouched');
+        assert.equal(after.code, code);
+        assert.equal(after.players.length, 1, 'incumbent room roster must stay untouched');
         assert.equal(await incumbent.evaluate(() => socket.connected), true);
         assert.deepEqual(incumbent.pageErrors, []);
         assert.deepEqual(duplicate.pageErrors, []);
@@ -748,6 +758,7 @@ async function run() {
     await test('RESUME_IN_USE retries resume the same identity after the owning tab closes', async () => {
       const incumbent = await openClient(browser, server.origin, { name: 'RetryOwner' });
       const incumbentState = await readClient(incumbent);
+      const code = await createRoom(incumbent);
       const token = await incumbent.evaluate(() => sessionStorage.getItem('wb_resume_token'));
       let retrying = null;
       try {
@@ -763,16 +774,19 @@ async function run() {
         assert.equal((await readClient(retrying)).playerId, null);
 
         // Free the token by closing the owning tab; the bounded retry loop
-        // must then resume the same stable player without registering anew.
+        // must then resume the same stable player and room seat.
         await incumbent.close();
         await retrying.waitForFunction(
           id => typeof myPlayerId !== 'undefined' && myPlayerId === id,
           [incumbentState.playerId],
           15000
         );
-        await waitForScreen(retrying, 'lobbyScreen');
+        await waitForLobby(retrying);
         const resumed = await readClient(retrying);
         assert.equal(resumed.playerId, incumbentState.playerId, 'retry must resume the incumbent id');
+        assert.equal(resumed.code, code, 'retry must resume the reserved room seat');
+        assert.equal(resumed.players.length, 1, 'retry must not duplicate the room seat');
+        assert.equal(resumed.hostId, incumbentState.playerId, 'retry must restore host ownership');
         const resumedButton = await retrying.evaluate(() => {
           const button = document.getElementById('enterLobbyBtn');
           return { text: button.textContent, aria: button.getAttribute('aria-label') };
@@ -1145,6 +1159,11 @@ async function run() {
         // Round 3: drop the transport and let Socket.IO reconnect with the same identity.
         await Promise.all([waitForRound(host, 3), waitForRound(guest, 3)]);
         const beforeDrop = await readClient(guest);
+        // Type a partial answer before the transport drops; a transient
+        // reconnect must not wipe it (only a changed round/match may reset).
+        const partialLetter = findWord(beforeDrop.start, beforeDrop.end)[0];
+        await guest.press(partialLetter);
+        assert.equal((await readClient(guest)).word, partialLetter.toUpperCase());
         await guest.evaluate(() => { socket.io.engine.close(); });
         await guest.waitForFunction(
           expected => typeof socket !== 'undefined' &&
@@ -1161,9 +1180,16 @@ async function run() {
         assert.equal(afterDrop.start, beforeDrop.start);
         assert.equal(afterDrop.end, beforeDrop.end);
         assert.equal(afterDrop.deadline, beforeDrop.deadline);
+        assert.equal(afterDrop.word, partialLetter.toUpperCase(),
+          'partial answer must survive the same-round reconnect');
+        assert.equal(await guest.evaluate(() => isWordInputOpen()), true);
         assert.equal(afterDrop.submitted, false, 'unsent round should still accept input after reconnect');
         assert.equal(afterDrop.players.length, 2, 'transient reconnect must not duplicate the player');
         assertUniquePlayerIds(afterDrop.players, 'transient reconnect');
+
+        // Clear the preserved partial answer before the normal submit loop.
+        await guest.press('Backspace');
+        assert.equal((await readClient(guest)).word, '');
 
         // Finish every remaining round quickly; each round ends as soon as both submit.
         for (let round = 3; round <= totalRounds; round += 1) {

@@ -28,9 +28,11 @@ const DEFAULT_CATEGORIES = {
   us_states: true,
   us_cities: true
 };
+// A paused round restores from server state just like a live round, so it
+// keeps the pre-existing 30s grace rather than the shorter in-round window.
 const DEFAULT_GRACE = {
   playing: 15000,
-  paused: 15000,
+  paused: 30000,
   lobby: 30000,
   finished: 30000,
   noRoom: 15000

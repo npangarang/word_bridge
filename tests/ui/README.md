@@ -49,12 +49,14 @@ UI_SCREENSHOT_DIR=/path/to/scratch/wordbridge-ui-shots node tests/ui/game-ui.tes
   existing minimum-length/dictionary validation
 - Category-rejection recovery without losing the typed word
 - Timer-expiry input lock
-- Both letter tiles visible through the low-timer shake, Comfort Mode and
-  reduced motion
-- Active-game viewport fit and keyboard stability with 2 and 8 players across
-  portrait, narrow, short and landscape viewports
+- Both letter tiles visible through the low-timer shake, at the instant the
+  critical state starts during the tile entrance, and in Comfort Mode,
+  reduced-motion and high-contrast modes
+- Active-game viewport fit and full keyboard-stability checks with real 2- and
+  8-player rosters across portrait, narrow, short and landscape viewports
 - Lobby/help/results keep normal document scrolling
-- Safe-area insets and `viewport-fit=cover`
+- Safe-area insets, `viewport-fit=cover`, and controls contained inside the
+  safe-area content box
 - Seven long-named disconnects in an 8-player game use a compact game-HUD
   notice, not the global fixed banner; bounds and center-point sampling prove
   no tile or keyboard control is visually covered, keyboard position stays

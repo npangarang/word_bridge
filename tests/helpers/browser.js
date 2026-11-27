@@ -21,6 +21,7 @@ const FAKE_SOCKET_SOURCE = `
 (function () {
   window.__socketHandlers = {};
   window.__socketEmits = [];
+  window.__socketConnectCalls = 0;
   window.io = function () {
     const socket = {
       connected: true,
@@ -33,8 +34,17 @@ const FAKE_SOCKET_SOURCE = `
         window.__socketEmits.push({ event, data });
         return socket;
       },
-      connect() { socket.connected = true; return socket; },
-      disconnect() { socket.connected = false; return socket; },
+      connect() {
+        window.__socketConnectCalls += 1;
+        socket.connected = true;
+        (window.__socketHandlers.connect || []).forEach(cb => cb());
+        return socket;
+      },
+      disconnect(reason = 'io client disconnect') {
+        socket.connected = false;
+        (window.__socketHandlers.disconnect || []).forEach(cb => cb(reason));
+        return socket;
+      },
       fire(event, data) {
         (window.__socketHandlers[event] || []).forEach(cb => cb(data));
       }

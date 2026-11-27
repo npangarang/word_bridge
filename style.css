@@ -1396,7 +1396,9 @@ body.timer-critical::before {
   40%, 80% { transform: translateX(6px); }
 }
 
-/* Fixed-height feedback line: validation text never pushes the keyboard. */
+/* Fixed-height feedback line: validation text never pushes the keyboard.
+   State classes are deliberately not `.error`/`.success`, which would inherit
+   the global `.error { display: none }` rule. */
 .word-feedback {
   height: 17px;
   min-height: 17px;
@@ -1412,8 +1414,8 @@ body.timer-critical::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.word-feedback.error { color: var(--neon-red); }
-.word-feedback.success { color: var(--neon-green); }
+.word-feedback.feedback-error { color: var(--neon-red); }
+.word-feedback.feedback-success { color: var(--neon-green); }
 
 #gameScreen .game-keyboard {
   display: flex;

@@ -99,7 +99,7 @@ test('default rules and native recovery settings are preserved', async (t) => {
   });
   assert.deepEqual(instance.grace, {
     playing: 15000,
-    paused: 15000,
+    paused: 30000,
     lobby: 30000,
     finished: 30000,
     noRoom: 15000
@@ -448,6 +448,64 @@ test('transient disconnect reserves the seat and hides the player from the globa
   resumed.client.emit('requestOnlinePlayers');
   const onlineAgain = await resumed.client.waitFor('onlinePlayers');
   assert.equal(onlineAgain.length, 2);
+});
+
+test('host grace expiry reassigns host and removes the seat exactly once', async (t) => {
+  const ctx = await createContext(t).start();
+  const a = await register(ctx, 'Alice');
+  const b = await register(ctx, 'Bob');
+  const c = await register(ctx, 'Carol');
+
+  a.client.emit('createRoom');
+  const room = await a.client.waitFor('roomCreated');
+  b.client.emit('joinRoom', { code: room.code });
+  await b.client.waitFor('roomJoined');
+  c.client.emit('joinRoom', { code: room.code });
+  await c.client.waitFor('roomJoined');
+
+  await a.client.disconnect();
+  await b.client.waitFor('opponentDisconnected', e => e.playerId === a.confirmed.playerId);
+
+  ctx.clock.tick(30000);
+  const left = await b.client.waitFor('playerLeft', e => e.playerId === a.confirmed.playerId);
+  assert.equal(left.hostId, b.confirmed.playerId, 'the first live roster member becomes host');
+  assert.equal(left.players.length, 2);
+  assert.equal(left.players.filter(p => p.id === a.confirmed.playerId).length, 0);
+  assert.equal(ctx.instance.getState().rooms[0].hostId, b.confirmed.playerId);
+  assert.equal(ctx.instance.getState().rooms[0].players.length, 2);
+  assert.equal(
+    ctx.instance.getState().sessions.some(s => s.playerId === a.confirmed.playerId),
+    false,
+    'expired session must be deleted'
+  );
+
+  const expired = await TestClient.connectExpectError(ctx.url, {
+    auth: { resumeToken: a.confirmed.resumeToken }
+  });
+  assert.equal(expired.code, 'SESSION_EXPIRED', 'expired host token must not resurrect the seat');
+});
+
+test('expiry of the last seated player deletes the room and its timers', async (t) => {
+  const ctx = await createContext(t).start();
+  const a = await register(ctx, 'Alice');
+  const b = await register(ctx, 'Bob');
+
+  a.client.emit('createRoom');
+  const room = await a.client.waitFor('roomCreated');
+  b.client.emit('joinRoom', { code: room.code });
+  await b.client.waitFor('roomJoined');
+
+  await b.client.disconnect();
+  ctx.clock.tick(30000);
+  const left = await a.client.waitFor('playerLeft', e => e.playerId === b.confirmed.playerId);
+  assert.equal(left.hostId, a.confirmed.playerId);
+  assert.equal(ctx.instance.getState().rooms[0].players.length, 1);
+
+  await a.client.disconnect();
+  ctx.clock.tick(30000);
+  await waitUntil(() => ctx.instance.getState().rooms.length === 0);
+  assert.equal(ctx.instance.getState().sessions.length, 0);
+  assert.equal(ctx.clock.pendingCount(), 0, 'expiry must leave no room or session timers behind');
 });
 
 test('multi-factory instances are isolated and close clears app timers', async (t) => {

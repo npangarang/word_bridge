@@ -21,7 +21,13 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const SCREENSHOTS = process.env.UI_SCREENSHOT_DIR || path.join(ROOT, 'screenshots', 'ui');
 const UI_MATCH_ID = 'ui-test-match-1';
 
-function playingSnapshot({ deadlineMs = 10000, round = 1, totalRounds = 10, playerNames = null } = {}) {
+function playingSnapshot({
+  deadlineMs = 10000,
+  round = 1,
+  totalRounds = 10,
+  playerNames = null,
+  submittedOpponents = 0
+} = {}) {
   const now = Date.now();
   const matchId = UI_MATCH_ID;
   const names = playerNames && playerNames.length ? playerNames : ['Tester'];
@@ -38,7 +44,7 @@ function playingSnapshot({ deadlineMs = 10000, round = 1, totalRounds = 10, play
       ready: true,
       comfortMode: false,
       connected: true,
-      submitted: false
+      submitted: index > 0 && index <= submittedOpponents
     })),
     matchId,
     roundStart: {
@@ -76,6 +82,13 @@ const COMFORT_INIT = `(() => {
   try { localStorage.setItem('wb_comfort_mode', JSON.stringify({ enabled: true })); } catch (e) {}
 })()`;
 
+// The browser profile (and therefore localStorage) is shared by every page in
+// this suite. Clear the persisted comfort preference unless a test asks for
+// it, otherwise later viewport/contrast tests silently run in Comfort Mode.
+const NO_COMFORT_INIT = `(() => {
+  try { localStorage.removeItem('wb_comfort_mode'); } catch (e) {}
+})()`;
+
 const VIEWPORTS = [
   { name: 'phone-320x568', width: 320, height: 568 },
   { name: 'phone-360x640', width: 360, height: 640 },
@@ -97,14 +110,15 @@ async function openGame(browser, origin, options = {}) {
     reduceMotion = false,
     contrast = false,
     waitMs = 1000,
-    playerNames = null
+    playerNames = null,
+    submittedOpponents = 0
   } = options;
 
   const mediaFeatures = [];
   if (reduceMotion) mediaFeatures.push({ name: 'prefers-reduced-motion', value: 'reduce' });
   if (contrast) mediaFeatures.push({ name: 'prefers-contrast', value: 'more' });
   const media = mediaFeatures.length ? { features: mediaFeatures } : null;
-  const initScripts = comfort ? [COMFORT_INIT] : [];
+  const initScripts = [comfort ? COMFORT_INIT : NO_COMFORT_INIT];
 
   const page = await browser.newPage({
     width,
@@ -120,13 +134,16 @@ async function openGame(browser, origin, options = {}) {
   // The client checks the dictionary before allowing a valid submission.
   await page.waitForFunction(() => {
     try {
-      return typeof wordLookupClient !== 'undefined' && Object.keys(wordLookupClient).length > 0;
+      return typeof wordLookupClient !== 'undefined' &&
+        Object.keys(wordLookupClient).length > 0 &&
+        typeof wordCategoriesClient !== 'undefined' &&
+        Object.keys(wordCategoriesClient).length > 0;
     } catch {
       return false;
     }
   }, [], 8000);
 
-  await firePlayingState(page, { deadlineMs, playerNames });
+  await firePlayingState(page, { deadlineMs, playerNames, submittedOpponents });
 
   await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'gameScreen');
   await page.waitForTimeout(waitMs);
@@ -188,79 +205,214 @@ async function controlGeometry(page) {
         height: +r.height.toFixed(1)
       };
     };
+    const nameOf = element => element.id || element.dataset.key || element.getAttribute('aria-label') || element.textContent.trim();
+    const visible = element => {
+      const style = getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
+    };
 
-    const controls = [
+    const game = document.getElementById('gameScreen');
+    const gameRect = game.getBoundingClientRect();
+    const gameStyle = getComputedStyle(game);
+    const contentBox = {
+      top: gameRect.top + parseFloat(gameStyle.paddingTop),
+      right: gameRect.right - parseFloat(gameStyle.paddingRight),
+      bottom: gameRect.bottom - parseFloat(gameStyle.paddingBottom),
+      left: gameRect.left + parseFloat(gameStyle.paddingLeft)
+    };
+
+    const interactive = [
       ...document.querySelectorAll('#gameKeyboard .word-key'),
       document.getElementById('submitWordBtn'),
       ...document.querySelectorAll('#gameReactions .reaction-btn'),
-      document.getElementById('wordDisplay'),
+      document.getElementById('wordDisplay')
+    ];
+    const layoutControls = [
+      ...interactive,
+      document.querySelector('#gameScreen .game-header'),
+      document.querySelector('#gameScreen .round-info'),
+      document.querySelector('#gameScreen .room-code-chip'),
+      document.getElementById('scoreHint'),
+      document.getElementById('timer'),
+      document.getElementById('wordFeedback'),
       document.getElementById('tile1'),
       document.getElementById('tile2')
-    ];
-    const clipped = controls
+    ].filter(Boolean);
+
+    const clipped = layoutControls
       .filter(element => {
         const r = element.getBoundingClientRect();
-        return r.width < 1 || r.height < 1 ||
+        return r.width < 1 || r.height < 1 || !visible(element) ||
           r.top < -0.5 || r.left < -0.5 ||
           r.bottom > innerHeight + 0.5 || r.right > innerWidth + 0.5;
       })
-      .map(element => element.id || element.dataset.key || element.getAttribute('aria-label') || element.textContent.trim());
+      .map(nameOf);
+    const outsideSafeArea = layoutControls
+      .filter(element => {
+        const r = element.getBoundingClientRect();
+        return r.top < contentBox.top - 0.75 ||
+          r.left < contentBox.left - 0.75 ||
+          r.bottom > contentBox.bottom + 0.75 ||
+          r.right > contentBox.right + 0.75;
+      })
+      .map(nameOf);
+    const covered = interactive
+      .filter(element => {
+        const r = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !hit || !(element === hit || element.contains(hit));
+      })
+      .map(nameOf);
 
     const keyboard = document.querySelector('.game-keyboard');
     const feedbackEl = document.getElementById('wordFeedback');
-    const game = document.getElementById('gameScreen');
     const status = document.getElementById('submissionsStatus');
 
     return {
       innerWidth,
       innerHeight,
       docScrollHeight: document.documentElement.scrollHeight,
+      docScrollWidth: document.documentElement.scrollWidth,
       scrollY,
+      scrollX,
       htmlOverflow: getComputedStyle(document.documentElement).overflowY,
       bodyOverflow: getComputedStyle(document.body).overflowY,
       gamePosition: getComputedStyle(game).position,
       keyboard: rect(keyboard),
       keyboardTop: +keyboard.getBoundingClientRect().top.toFixed(1),
       feedbackRect: rect(feedbackEl),
+      feedbackText: feedbackEl.textContent,
       statusScrollWidth: status.scrollWidth,
       statusClientWidth: status.clientWidth,
       statusScrollLeft: status.scrollLeft,
-      clipped
+      clipped,
+      outsideSafeArea,
+      covered
     };
   });
 }
 
-async function testCriticalTiles(page) {
+async function testCriticalTiles(page, { expectShake = true } = {}) {
   await page.waitForFunction(() => document.getElementById('gameScreen').classList.contains('screen-critical'));
-  await page.waitForTimeout(300);
 
-  const samples = await page.evaluate(async () => {
-    const out = [];
+  const state = await page.evaluate(async () => {
+    const tiles = document.querySelector('.tiles');
+    const sample = () => {      const tile1 = document.getElementById('tile1');
+      const tile2 = document.getElementById('tile2');
+      const style1 = getComputedStyle(tile1);
+      const style2 = getComputedStyle(tile2);
+      const tilesStyle = getComputedStyle(tiles);
+      const rect2 = tile2.getBoundingClientRect();
+      return {
+        opacity1: style1.opacity,
+        opacity2: style2.opacity,
+        visibility1: style1.visibility,
+        visibility2: style2.visibility,
+        width2: rect2.width,
+        height2: rect2.height,
+        transform: tilesStyle.transform,
+        animationName: tilesStyle.animationName,
+        animationPlayState: tilesStyle.animationPlayState
+      };
+    };
+
+    // Let the style/animation frame settle before sampling steady-state
+    // visibility; the onset-during-entrance test above deliberately samples
+    // the very first frame instead.
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const samples = [sample()];
     for (let i = 0; i < 12; i += 1) {
-      out.push([
-        getComputedStyle(document.getElementById('tile1')).opacity,
-        getComputedStyle(document.getElementById('tile2')).opacity
-      ]);
       await new Promise(resolve => setTimeout(resolve, 50));
+      samples.push(sample());
     }
-    return out;
+    return {
+      samples,
+      tile1: document.getElementById('tile1').textContent,
+      tile2: document.getElementById('tile2').textContent,
+      critical: document.getElementById('gameScreen').classList.contains('screen-critical')
+    };
   });
-
-  const state = await page.evaluate(() => ({
-    tile1: document.getElementById('tile1').textContent,
-    tile2: document.getElementById('tile2').textContent,
-    tile2Width: document.getElementById('tile2').getBoundingClientRect().width,
-    tilesAnimation: getComputedStyle(document.querySelector('.tiles')).animationName,
-    critical: document.getElementById('gameScreen').classList.contains('screen-critical')
-  }));
 
   assert.equal(state.critical, true, 'critical shake state should be active');
   assert.equal(state.tile1, 'A');
   assert.equal(state.tile2, 'T');
-  assert.ok(state.tile2Width > 0, 'second tile must have layout size');
-  assert.ok(
-    samples.every(([opacity1, opacity2]) => opacity1 === '1' && opacity2 === '1'),
-    `both letter tiles must stay visible through every sampled shake frame: ${JSON.stringify(samples)}`
+  const bad = state.samples.filter(sample =>
+    sample.opacity1 !== '1' ||
+    sample.opacity2 !== '1' ||
+    sample.visibility1 !== 'visible' ||
+    sample.visibility2 !== 'visible' ||
+    sample.width2 < 1 ||
+    sample.height2 < 1
+  );
+  assert.deepEqual(
+    bad,
+    [],
+    `both letter tiles must stay visible through every sampled shake frame: ${JSON.stringify(bad)}`
+  );
+
+  const first = state.samples[0];
+  if (expectShake) {
+    assert.match(first.animationName, /tileShake/,
+      `the critical shake must animate the tiles container (got ${first.animationName})`);
+    assert.equal(first.animationPlayState, 'running',
+      `the critical shake must actually be running (got ${first.animationPlayState})`);
+    assert.ok(
+      state.samples.some(sample => sample.transform !== first.transform),
+      `the critical shake must move the tiles over time: ${JSON.stringify(state.samples.map(s => s.transform))}`
+    );
+  } else {
+    assert.equal(first.animationName, 'none', 'this mode must suppress the critical shake');
+  }
+  return state;
+}
+
+function assertSameKeyboardRect(before, after, label) {
+  for (const key of ['top', 'left', 'width', 'height']) {
+    assert.ok(
+      Math.abs(after.keyboard[key] - before.keyboard[key]) <= 0.75,
+      `${label}: keyboard ${key} moved ${before.keyboard[key]} -> ${after.keyboard[key]}`
+    );
+  }
+}
+
+async function testCriticalOnsetDuringEntrance(page) {
+  await page.waitForFunction(() => document.getElementById('gameScreen').classList.contains('screen-critical'));
+
+  const state = await page.evaluate(async () => {
+    const sample = () => {
+      const tile2 = document.getElementById('tile2');
+      const style1 = getComputedStyle(document.getElementById('tile1'));
+      const style2 = getComputedStyle(tile2);
+      const rect2 = tile2.getBoundingClientRect();
+      return {
+        opacity1: style1.opacity,
+        opacity2: style2.opacity,
+        visibility2: style2.visibility,
+        width2: rect2.width,
+        height2: rect2.height
+      };
+    };
+    const samples = [sample()];
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    samples.push(sample());
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      samples.push(sample());
+    }
+    return { samples };
+  });
+
+  const bad = state.samples.filter(sample =>
+    sample.opacity1 !== '1' ||
+    sample.opacity2 !== '1' ||
+    sample.visibility2 !== 'visible' ||
+    sample.width2 < 1 ||
+    sample.height2 < 1
+  );
+  assert.deepEqual(
+    bad,
+    [],
+    `the second tile must not flash dark when critical starts during its entrance: ${JSON.stringify(bad)}`
   );
   return state;
 }
@@ -518,6 +670,11 @@ async function run() {
         await page.press('t');
         assert.equal(await wordValue(page), 'ART');
 
+        await page.press('Backspace');
+        assert.equal(await wordValue(page), 'AR');
+        await page.press('t');
+        assert.equal(await wordValue(page), 'ART');
+
         await page.press('Delete');
         assert.equal(await wordValue(page), 'AR');
         await page.press('t');
@@ -560,6 +717,18 @@ async function run() {
         const keyboardTopAfter = await page.evaluate(() => document.querySelector('.game-keyboard').getBoundingClientRect().top);
         assert.ok(Math.abs(keyboardTopAfter - keyboardTopBefore) <= 0.75,
           `keyboard moved when validation feedback appeared: ${keyboardTopBefore} -> ${keyboardTopAfter}`);
+        const feedbackVisibility = await page.evaluate(() => {
+          const el = document.getElementById('wordFeedback');
+          const style = getComputedStyle(el);
+          return {
+            display: style.display,
+            height: el.getBoundingClientRect().height,
+            color: style.color
+          };
+        });
+        assert.notEqual(feedbackVisibility.display, 'none', 'validation feedback must be visible');
+        assert.ok(feedbackVisibility.height > 0, 'validation feedback must occupy its fixed line');
+        assert.equal(feedbackVisibility.color, 'rgb(255, 90, 90)', 'error feedback must use the error color');
 
         await resetRound(page);
         await page.click('[aria-label="Letter A"]');
@@ -576,6 +745,17 @@ async function run() {
         await page.click('#submitWordBtn');
         assert.match(await feedback(page), /start with A/i);
         assert.equal(await wordValue(page), 'BAT');
+
+        await page.click('[aria-label="Delete last letter"]');
+        await page.click('[aria-label="Delete last letter"]');
+        await page.click('[aria-label="Delete last letter"]');
+        await page.click('[aria-label="Letter A"]');
+        await page.click('[aria-label="Letter R"]');
+        await page.click('[aria-label="Letter C"]');
+        await page.click('#submitWordBtn');
+        assert.match(await feedback(page), /end with T/i);
+        assert.equal(await wordValue(page), 'ARC');
+        assert.equal((await emitted(page)).filter(item => item.event === 'submitWord').length, 0);
 
         await resetRound(page);
         await page.click('[aria-label="Letter A"]');
@@ -601,6 +781,52 @@ async function run() {
         assert.equal((await wordValue(page)).length, 20);
         assert.match(await feedback(page), /Maximum 20 characters/);
         assert.equal((await emitted(page)).filter(item => item.event === 'submitWord').length, 0);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('client-side category filter rejects before sending and allows retry', async () => {
+      const page = await openGame(browser, server.origin);
+      try {
+        await page.evaluate(() => {
+          window.__socket.fire('categoriesUpdated', {
+            categories: {
+              noun_adj_verb: false,
+              countries: false,
+              us_states: false,
+              us_cities: false
+            }
+          });
+        });
+        for (const letter of ['A', 'R', 'T']) {
+          await page.click(`[aria-label="Letter ${letter}"]`);
+        }
+        await page.click('#submitWordBtn');
+        assert.match(await feedback(page), /selected categories/i);
+        assert.equal(await wordValue(page), 'ART', 'rejected category word must stay editable');
+        assert.equal((await emitted(page)).filter(item => item.event === 'submitWord').length, 0);
+        assert.equal(
+          await page.evaluate(() => [...document.querySelectorAll('#gameKeyboard .word-key')].every(key => !key.disabled)),
+          true,
+          'category rejection must re-enable the keyboard'
+        );
+
+        await page.evaluate(() => {
+          window.__socket.fire('categoriesUpdated', {
+            categories: {
+              noun_adj_verb: true,
+              countries: true,
+              us_states: true,
+              us_cities: true
+            }
+          });
+        });
+        await page.click('#submitWordBtn');
+        const submits = (await emitted(page)).filter(item => item.event === 'submitWord');
+        assert.equal(submits.length, 1);
+        assert.deepEqual(submits[0].data, { word: 'art', matchId: UI_MATCH_ID, round: 1 });
         assert.deepEqual(page.pageErrors, []);
       } finally {
         await page.close();
@@ -665,8 +891,21 @@ async function run() {
       const page = await openGame(browser, server.origin, { deadlineMs: 5000 });
       try {
         const state = await testCriticalTiles(page);
-        assert.match(state.tilesAnimation, /tileShake/);
+        assert.match(state.samples[0].animationName, /tileShake/);
         await page.screenshot(path.join(SCREENSHOTS, 'critical-shake-390x844.png'));
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('both pair letters are visible the instant critical starts during the tile entrance', async () => {
+      // 4.15s leaves the critical threshold only ~150ms after the round starts,
+      // while the delayed second-tile entrance is still at its 0% frame.
+      const page = await openGame(browser, server.origin, { deadlineMs: 4150, waitMs: 0 });
+      try {
+        await testCriticalOnsetDuringEntrance(page);
+        await page.screenshot(path.join(SCREENSHOTS, 'critical-onset-during-entrance-390x844.png'));
         assert.deepEqual(page.pageErrors, []);
       } finally {
         await page.close();
@@ -704,7 +943,7 @@ async function run() {
       });
       try {
         assert.equal(await page.evaluate(() => document.body.classList.contains('comfort-mode')), true);
-        await testCriticalTiles(page);
+        await testCriticalTiles(page, { expectShake: false });
         const beforeChips = await controlGeometry(page);
         await addSubmissionChips(page, 8);
         const geometry = await controlGeometry(page);
@@ -725,7 +964,7 @@ async function run() {
         reduceMotion: true
       });
       try {
-        await testCriticalTiles(page);
+        await testCriticalTiles(page, { expectShake: false });
         await page.screenshot(path.join(SCREENSHOTS, 'critical-shake-reduced-motion-390x844.png'));
         assert.deepEqual(page.pageErrors, []);
       } finally {
@@ -733,11 +972,11 @@ async function run() {
       }
     });
 
-    await test('high-contrast mode keeps the keyboard controls and answer display legible', async () => {
+    await test('high-contrast mode keeps the keyboard controls and critical tiles legible', async () => {
       const page = await openGame(browser, server.origin, {
         width: 320,
         height: 568,
-        deadlineMs: 10000,
+        deadlineMs: 5000,
         contrast: true
       });
       try {
@@ -753,20 +992,143 @@ async function run() {
         assert.equal(contrastState.displayBorder, 'rgb(255, 255, 255)');
         assert.equal(contrastState.keyBorder, 'rgb(255, 255, 255)');
         assert.equal(contrastState.keyBackground, 'rgb(0, 0, 0)');
+        await testCriticalTiles(page);
         const geometry = await controlGeometry(page);
         assert.deepEqual(geometry.clipped, [], `high-contrast controls clipped: ${JSON.stringify(geometry.clipped)}`);
+        assert.deepEqual(geometry.covered, [], `high-contrast controls covered: ${JSON.stringify(geometry.covered)}`);
         assert.deepEqual(page.pageErrors, []);
       } finally {
         await page.close();
       }
     });
 
+    await test('a same-round reconnect preserves a partially typed answer', async () => {
+      const page = await openGame(browser, server.origin);
+      try {
+        await page.press('a');
+        await page.press('r');
+        assert.equal(await wordValue(page), 'AR');
+
+        await page.evaluate(state => {
+          window.__socket.fire('nameConfirmed', {
+            playerId: 'p1',
+            name: 'Tester',
+            resumeToken: 'ui-test-resume-token',
+            resumed: true
+          });
+          window.__socket.fire('roomStateRestored', state);
+        }, playingSnapshot({ deadlineMs: 10000 }));
+        await page.waitForTimeout(120);
+        assert.equal(await wordValue(page), 'AR', 'same round/match restore must keep the typed answer');
+        assert.equal(await page.evaluate(() => isWordInputOpen()), true);
+
+        await page.evaluate(state => {
+          window.__socket.fire('roomStateRestored', state);
+        }, playingSnapshot({ deadlineMs: 10000, round: 2 }));
+        await page.waitForTimeout(120);
+        assert.equal(await page.evaluate(() => currentWord), '', 'a different round must start with an empty answer');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('a successful transport connect clears a stale browserOffline flag', async () => {
+      const page = await openGame(browser, server.origin);
+      try {
+        await page.evaluate(() => {
+          browserOffline = true;
+          window.__socket.connected = false;
+          window.__socket.connect();
+        });
+        assert.equal(await page.evaluate(() => browserOffline), false,
+          'a live handshake proves connectivity even without an online event');
+        await page.evaluate(state => {
+          window.__socket.fire('roomStateRestored', state);
+        }, playingSnapshot({ deadlineMs: 10000 }));
+        await page.waitForTimeout(120);
+        assert.equal(await page.evaluate(() => isWordInputOpen()), true,
+          'input must reopen after the reconnect snapshot');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('server-initiated disconnect retries; client-initiated disconnect does not', async () => {
+      const page = await openGame(browser, server.origin);
+      try {
+        await page.evaluate(() => {
+          window.__socketConnectCalls = 0;
+          window.__socket.connected = false;
+          window.__socket.fire('disconnect', 'io client disconnect');
+        });
+        await page.waitForTimeout(600);
+        assert.equal(await page.evaluate(() => window.__socketConnectCalls), 0,
+          'a client-initiated disconnect must not auto-retry');
+
+        await page.evaluate(() => {
+          window.__socketConnectCalls = 0;
+          window.__socket.connected = false;
+          window.__socket.fire('disconnect', 'io server disconnect');
+        });
+        await page.waitForTimeout(600);
+        assert.ok(await page.evaluate(() => window.__socketConnectCalls) >= 1,
+          'a server-rejected resume claim must retry the same token');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('exhausted duplicate-tab retries offer an explicit new-player path', async () => {
+      const page = await openGame(browser, server.origin);
+      try {
+        await page.evaluate(() => {
+          handleResumeInUse();
+          cancelResumeRetry();
+          resumeConflict = true;
+          resumeRetryAttempt = RESUME_RETRY_DELAYS.length;
+          scheduleResumeRetry();
+        });
+        await page.waitForFunction(
+          () => document.querySelector('.screen.active')?.id === 'nameScreen',
+          [],
+          2000
+        );
+        const conflict = await page.evaluate(() => ({
+          button: document.getElementById('enterLobbyBtn').textContent,
+          token: sessionStorage.getItem('wb_resume_token'),
+          error: document.getElementById('nameError').textContent
+        }));
+        assert.equal(conflict.button, 'PLAY AS NEW PLAYER');
+        assert.equal(conflict.token, 'ui-test-resume-token', 'the old token is kept until an explicit choice');
+        assert.match(conflict.error, /another tab/i);
+
+        await page.evaluate(() => {
+          document.getElementById('playerNameInput').value = 'Tester';
+        });
+        await page.click('#enterLobbyBtn');
+        const emittedEvents = await emitted(page);
+        assert.equal(emittedEvents.filter(item => item.event === 'setName').length, 1,
+          'explicit name entry must create a new session');
+        assert.equal(await page.evaluate(() => sessionStorage.getItem('wb_resume_token')), null,
+          'choosing a new player must drop the conflicting token');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    const eightPlayers = Array.from({ length: 8 }, (_, index) => `Player${index + 1}`);
     for (const viewport of VIEWPORTS) {
-      await test(`viewport ${viewport.name}: all controls fit, sleep-proof keyboard, no page scroll`, async () => {
+      await test(`viewport ${viewport.name}: 8-player HUD fits, keyboard is stationary, no page scroll`, async () => {
         const page = await openGame(browser, server.origin, {
           width: viewport.width,
           height: viewport.height,
-          deadlineMs: 5000
+          deadlineMs: 6000,
+          playerNames: eightPlayers,
+          submittedOpponents: 7
         });
         try {
           const before = await controlGeometry(page);
@@ -774,23 +1136,27 @@ async function run() {
           assert.equal(before.bodyOverflow, 'hidden');
           assert.equal(before.gamePosition, 'fixed');
           assert.ok(before.docScrollHeight <= before.innerHeight + 1, `document scroll height ${before.docScrollHeight} > ${before.innerHeight}`);
-          assert.deepEqual(before.clipped, [], `clipped controls before chips: ${JSON.stringify(before.clipped)}`);
+          assert.ok(before.docScrollWidth <= before.innerWidth + 1, `document scroll width ${before.docScrollWidth} > ${before.innerWidth}`);
+          assert.deepEqual(before.clipped, [], `clipped controls: ${JSON.stringify(before.clipped)}`);
+          assert.deepEqual(before.outsideSafeArea, [], `controls outside safe-area content box: ${JSON.stringify(before.outsideSafeArea)}`);
+          assert.deepEqual(before.covered, [], `controls covered at their center: ${JSON.stringify(before.covered)}`);
           assert.ok(before.feedbackRect.height > 0, 'feedback must be visible');
-          await page.screenshot(path.join(SCREENSHOTS, `game-${viewport.name}.png`));
+          await page.screenshot(path.join(SCREENSHOTS, `game-8players-${viewport.name}.png`));
 
-          await addSubmissionChips(page, 8);
-          const afterChips = await controlGeometry(page);
-          assert.deepEqual(afterChips.clipped, [], `clipped controls with 8 players: ${JSON.stringify(afterChips.clipped)}`);
-          assert.ok(Math.abs(afterChips.keyboardTop - before.keyboardTop) <= 0.75,
-            `keyboard moved when submissions arrived: ${before.keyboardTop} -> ${afterChips.keyboardTop}`);
-          if (afterChips.statusScrollWidth > afterChips.statusClientWidth) {
-            assert.ok(afterChips.statusScrollLeft > 0, 'newest submission chip should scroll into view');
-          }
+          // A long validation message must be clipped to its fixed-height line,
+          // never push the keyboard.
+          await page.evaluate(() => {
+            setWordFeedback('A deliberately long validation message that must not move the on-screen keyboard', 'error');
+          });
+          await page.waitForTimeout(80);
+          const afterFeedback = await controlGeometry(page);
+          assertSameKeyboardRect(before, afterFeedback, 'feedback text change');
+          assert.deepEqual(afterFeedback.clipped, [], `clipped controls after feedback: ${JSON.stringify(afterFeedback.clipped)}`);
 
-          await page.waitForTimeout(800);
+          await page.waitForFunction(() => document.getElementById('gameScreen').classList.contains('screen-critical'));
           const afterTimer = await controlGeometry(page);
-          assert.ok(Math.abs(afterTimer.keyboardTop - before.keyboardTop) <= 0.75,
-            `keyboard moved during critical timer: ${before.keyboardTop} -> ${afterTimer.keyboardTop}`);
+          assertSameKeyboardRect(before, afterTimer, 'critical timer');
+          assert.deepEqual(afterTimer.clipped, [], `clipped controls during critical timer: ${JSON.stringify(afterTimer.clipped)}`);
 
           await page.evaluate(() => {
             window.scrollTo(0, 9999);
@@ -799,16 +1165,38 @@ async function run() {
           });
           await page.waitForTimeout(50);
           const afterScroll = await controlGeometry(page);
-          assert.equal(afterScroll.scrollY, 0, 'game viewport must not scroll');
+          assert.equal(afterScroll.scrollY, 0, 'game viewport must not scroll vertically');
+          assert.equal(afterScroll.scrollX, 0, 'game viewport must not scroll horizontally');
           assert.deepEqual(afterScroll.clipped, [], `clipped controls after scroll attempt: ${JSON.stringify(afterScroll.clipped)}`);
 
-          await page.screenshot(path.join(SCREENSHOTS, `game-8players-${viewport.name}.png`));
           assert.deepEqual(page.pageErrors, []);
         } finally {
           await page.close();
         }
       });
     }
+
+    await test('viewport 2-player HUD fits and keeps the keyboard stationary', async () => {
+      const page = await openGame(browser, server.origin, {
+        width: 320,
+        height: 568,
+        playerNames: ['Tester', 'Opponent'],
+        submittedOpponents: 1
+      });
+      try {
+        const before = await controlGeometry(page);
+        assert.deepEqual(before.clipped, []);
+        assert.deepEqual(before.outsideSafeArea, []);
+        assert.deepEqual(before.covered, []);
+        await page.waitForFunction(() => document.getElementById('gameScreen').classList.contains('screen-critical'));
+        const after = await controlGeometry(page);
+        assertSameKeyboardRect(before, after, '2-player critical timer');
+        assert.deepEqual(after.clipped, []);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
 
     await test('lobby/help/results retain normal document scrolling', async () => {
       const lobbyPage = await browser.newPage({
@@ -872,7 +1260,11 @@ async function run() {
         await portrait.waitForFunction(() => window.__socket && document.getElementById('wordDisplay'));
         const meta = await portrait.evaluate(() => document.querySelector('meta[name="viewport"]').content);
         assert.match(meta, /viewport-fit=cover/);
-        await firePlayingState(portrait, { deadlineMs: 10000 });
+        await firePlayingState(portrait, {
+          deadlineMs: 10000,
+          playerNames: Array.from({ length: 8 }, (_, index) => `Player${index + 1}`),
+          submittedOpponents: 7
+        });
         await portrait.waitForTimeout(1000);
         const portraitState = await portrait.evaluate(() => {
           const game = document.getElementById('gameScreen');
@@ -890,11 +1282,14 @@ async function run() {
         assert.ok(portraitState.paddingBottom >= 34, `bottom safe area not applied: ${portraitState.paddingBottom}`);
         assert.ok(portraitState.height <= portraitState.innerHeight + 1);
         const portraitKeyboardTop = await portrait.evaluate(() => document.querySelector('.game-keyboard').getBoundingClientRect().top);
-        await addSubmissionChips(portrait, 8);
         const portraitGeometry = await controlGeometry(portrait);
         assert.ok(Math.abs(portraitGeometry.keyboardTop - portraitKeyboardTop) <= 0.75,
           `portrait safe-area keyboard moved: ${portraitKeyboardTop} -> ${portraitGeometry.keyboardTop}`);
         assert.deepEqual(portraitGeometry.clipped, [], `portrait safe-area clipped: ${JSON.stringify(portraitGeometry.clipped)}`);
+        assert.deepEqual(portraitGeometry.outsideSafeArea, [],
+          `portrait controls outside safe-area content: ${JSON.stringify(portraitGeometry.outsideSafeArea)}`);
+        assert.deepEqual(portraitGeometry.covered, [], `portrait controls covered: ${JSON.stringify(portraitGeometry.covered)}`);
+        assert.deepEqual(portrait.pageErrors, []);
       } finally {
         await portrait.close();
       }
@@ -908,7 +1303,11 @@ async function run() {
       try {
         await landscape.goto(server.origin + '/');
         await landscape.waitForFunction(() => window.__socket && document.getElementById('wordDisplay'));
-        await firePlayingState(landscape, { deadlineMs: 10000 });
+        await firePlayingState(landscape, {
+          deadlineMs: 10000,
+          playerNames: Array.from({ length: 8 }, (_, index) => `Player${index + 1}`),
+          submittedOpponents: 7
+        });
         await landscape.waitForTimeout(1000);
         const landscapeState = await landscape.evaluate(() => {
           const style = getComputedStyle(document.getElementById('gameScreen'));
@@ -922,11 +1321,14 @@ async function run() {
         assert.ok(landscapeState.paddingRight >= 44, `right safe area not applied: ${landscapeState.paddingRight}`);
         assert.ok(landscapeState.paddingBottom >= 21, `bottom safe area not applied: ${landscapeState.paddingBottom}`);
         const landscapeKeyboardTop = await landscape.evaluate(() => document.querySelector('.game-keyboard').getBoundingClientRect().top);
-        await addSubmissionChips(landscape, 8);
         const landscapeGeometry = await controlGeometry(landscape);
         assert.ok(Math.abs(landscapeGeometry.keyboardTop - landscapeKeyboardTop) <= 0.75,
           `landscape safe-area keyboard moved: ${landscapeKeyboardTop} -> ${landscapeGeometry.keyboardTop}`);
         assert.deepEqual(landscapeGeometry.clipped, [], `landscape safe-area clipped: ${JSON.stringify(landscapeGeometry.clipped)}`);
+        assert.deepEqual(landscapeGeometry.outsideSafeArea, [],
+          `landscape controls outside safe-area content: ${JSON.stringify(landscapeGeometry.outsideSafeArea)}`);
+        assert.deepEqual(landscapeGeometry.covered, [], `landscape controls covered: ${JSON.stringify(landscapeGeometry.covered)}`);
+        assert.deepEqual(landscape.pageErrors, []);
       } finally {
         await landscape.close();
       }

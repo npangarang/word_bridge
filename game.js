@@ -43,6 +43,7 @@ let resumeRetryExhausted = false;
 let resumeNoticeShown = false;
 let sessionExpiredHandled = false;
 let serverClockOffset = 0;
+let pageHiding = false;
 
 // Bounded, cancellable retries for RESUME_IN_USE. Middleware rejections do not
 // auto-retry, and we never fall back to setName while another tab owns the
@@ -81,7 +82,7 @@ function scheduleResumeRetry() {
     if (!resumeRetryExhausted) {
       resumeRetryExhausted = true;
       const message = 'This session is still active in another tab. Close it and refresh, or enter your name to play as a new player.';
-      if (myPlayerId) showToast(message);
+      if (myPlayerId) offerNewSessionAfterConflict(message);
       else showError(message, 'nameError');
     }
     return;
@@ -169,6 +170,21 @@ function handleResumeInUse() {
   scheduleResumeRetry();
 }
 
+// A tab that already had an identity can lose the token to another live tab
+// (for example a half-open transport held past the retry budget). Automatic
+// retries must not run forever, so offer the same explicit "play as a new
+// player" escape as a fresh duplicate tab. The old token is retained until
+// the user actually submits a name.
+function offerNewSessionAfterConflict(message) {
+  const profile = loadProfile();
+  if (profile && profile.name) $('playerNameInput').value = profile.name;
+  setEnterButtonLabel(true);
+  myPlayerId = null;
+  authoritativeReady = false;
+  showScreen('nameScreen');
+  showError(message, 'nameError');
+}
+
 function refreshInputAvailability() {
   const open = typeof isWordInputOpen === 'function' && isWordInputOpen();
   if (typeof setKeyboardEnabled === 'function') setKeyboardEnabled(open);
@@ -194,6 +210,10 @@ function syncComfortMode() {
 }
 
 socket.on('connect', () => {
+  // A successful transport handshake proves connectivity even when a transient
+  // navigator.onLine=false reading never produced a matching online event.
+  browserOffline = false;
+  pageHiding = false;
   cancelResumeRetry();
   resumeConflict = false;
   resumeNoticeShown = false;
@@ -214,9 +234,17 @@ socket.on('connect', () => {
   refreshInputAvailability();
 });
 
-socket.on('disconnect', () => {
+socket.on('disconnect', (reason) => {
   authoritativeReady = false;
   refreshInputAvailability();
+  // The server only force-disconnects a resumed socket when its claim lost a
+  // race (old transport closing / generation change). Socket.IO does not
+  // auto-reconnect after `io server disconnect`, so retry the same token with
+  // the same bounded policy; a truly expired token becomes SESSION_EXPIRED.
+  if (reason === 'io server disconnect' && !pageHiding && readResumeToken()) {
+    resumeConflict = true;
+    scheduleResumeRetry();
+  }
 });
 
 socket.on('connect_error', (error) => {
@@ -260,11 +288,13 @@ window.addEventListener('online', () => {
 // Unload is a transport disconnect only: the server keeps the session during
 // its grace window so the refreshed page can resume it. Never emit leaveRoom.
 window.addEventListener('pagehide', () => {
+  pageHiding = true;
   cancelResumeRetry();
   if (socket.connected) socket.disconnect();
 });
 
 window.addEventListener('pageshow', (event) => {
+  pageHiding = false;
   if (event.persisted && !socket.connected) socket.connect();
 });
 
@@ -1513,8 +1543,8 @@ function setWordFeedback(message, state = '') {
   const el = $('wordFeedback');
   if (!el) return;
   if (el.textContent !== message) el.textContent = message;
-  el.classList.toggle('error', state === 'error');
-  el.classList.toggle('success', state === 'success');
+  el.classList.toggle('feedback-error', state === 'error');
+  el.classList.toggle('feedback-success', state === 'success');
 }
 
 function renderWordDisplay() {
@@ -2113,6 +2143,12 @@ function applyRoundStart(data, options = {}) {
   if (!data) return;
   const restore = !!options.restore;
   const ownSubmission = options.ownSubmission || null;
+  // A transport reconnect re-sends the same active round. Do not discard a
+  // partially typed answer unless the match/round actually changed.
+  const previousWord = currentWord;
+  const previousRound = currentRound;
+  const previousMatchId = currentMatchId;
+  const previousSubmitted = submitted;
 
   stopPhaseTimers();
   currentRound = data.round;
@@ -2177,6 +2213,21 @@ function applyRoundStart(data, options = {}) {
       }
     }
     syncScoresFromRoster();
+  }
+
+  const sameActiveRound = restore &&
+    !previousSubmitted &&
+    !!previousWord &&
+    data.matchId !== undefined &&
+    data.matchId !== null &&
+    previousMatchId !== null &&
+    previousMatchId !== undefined &&
+    String(previousMatchId) === String(data.matchId) &&
+    previousRound === data.round;
+  if (sameActiveRound && !submitted && !ownSubmission && serverNow() < roundDeadline) {
+    currentWord = previousWord.slice(0, WORD_MAX_LENGTH);
+    renderWordDisplay();
+    setWordFeedback(WORD_DEFAULT_FEEDBACK);
   }
   updateScoreHint();
 
