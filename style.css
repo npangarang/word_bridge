@@ -125,8 +125,8 @@ body:has(#gameScreen.active) {
   grid-template-areas:
     "header"
     "play"
-    "input"
-    "react";
+    "react"
+    "input";
   gap: 8px;
   align-content: stretch;
   justify-content: stretch;
@@ -138,9 +138,9 @@ body:has(#gameScreen.active) {
   margin: 0 auto;
   padding:
     max(8px, env(safe-area-inset-top))
-    max(10px, env(safe-area-inset-right))
-    max(8px, env(safe-area-inset-bottom))
-    max(10px, env(safe-area-inset-left));
+    max(6px, env(safe-area-inset-right))
+    env(safe-area-inset-bottom)
+    max(6px, env(safe-area-inset-left));
   overflow: hidden;
   overscroll-behavior: none;
   animation: gameScreenIn 0.22s ease-out;
@@ -170,6 +170,8 @@ body:has(#gameScreen.active) {
   white-space: nowrap !important;
   border: 0 !important;
 }
+
+[hidden] { display: none !important; }
 
 /* Consistent focus ring everywhere, visible only during keyboard navigation */
 :focus { outline: none; }
@@ -254,6 +256,47 @@ h2 { font-family: var(--font-body); font-size: calc(15px * var(--text-scale)); f
   width: 100%;
   max-width: 360px;
 }
+
+/* Solo entry — same retro button language, local-only best badge alongside. */
+.solo-entry {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  margin-top: 6px;
+}
+.solo-entry .solo-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.solo-best {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: calc(48px * var(--touch-scale));
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border: 2px solid var(--neon-yellow);
+  border-radius: var(--radius-card);
+  color: var(--neon-yellow);
+  font-family: var(--font-mono);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 800;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.solo-entry-hint {
+  max-width: 360px;
+  margin-top: -4px;
+  color: var(--text-medium);
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.4;
+  text-align: center;
+}
+.lobby-solo-entry { margin: 4px 0 6px; }
 
 .arcade-input,
 .profile-modal-content input[type="text"],
@@ -1040,32 +1083,67 @@ h2 { font-family: var(--font-body); font-size: calc(15px * var(--text-scale)); f
 
 /* =========================================================================
    ALWAYS-VISIBLE SCORE HINT (game)
+   You + one compact entry per opponent. Scores are ordered descending with
+   roster order breaking ties. Opponent entries wrap to a second row on narrow
+   portrait screens so an 8-player match never widens or scrolls the page.
    ========================================================================= */
 .score-hint {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding: 10px 16px;
+  gap: 3px 6px;
+  padding: 6px 8px;
   background: var(--bg-panel);
   border: 2px solid var(--text-medium);
   border-radius: var(--radius-card);
   font-family: var(--font-body);
-  font-size: calc(15px * var(--text-scale));
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
+  line-height: 1.2;
   color: var(--text-strong);
   width: 100%;
   max-width: 360px;
+  min-width: 0;
 }
-.score-hint-row {
+.score-hint-row,
+.score-hint-opponent {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  flex: 0 1 calc(25% - 6px);
+  min-width: 0;
+  height: 17px;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .score-hint-row strong {
   font-weight: 800;
-  font-size: calc(18px * var(--text-scale));
-  padding: 0 6px;
+  font-size: calc(15px * var(--text-scale));
+  padding: 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+.score-hint-me strong,
+.score-hint-best strong { margin-left: auto; }
+.score-hint-opp-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.score-hint-opp-score {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 4px;
+  font-weight: 800;
+  font-size: calc(14px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  color: var(--neon-cyan);
+}
+.score-hint-empty {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-medium);
+  white-space: nowrap;
 }
 .score-hint-divider {
   display: inline-block;
@@ -1075,13 +1153,14 @@ h2 { font-family: var(--font-body); font-size: calc(15px * var(--text-scale)); f
 }
 .dot {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 .dot-you { background: var(--neon-green); }
 .dot-opp { background: var(--neon-magenta); }
+.dot-best { background: var(--neon-yellow); }
 
 /* =========================================================================
    TIMER (decorative chrome — keep pixel, but bigger)
@@ -1303,6 +1382,11 @@ body.timer-critical::before {
 }
 #gameScreen .submissions-status::-webkit-scrollbar { display: none; }
 #gameScreen .submission-item { flex: 0 0 auto; }
+#gameScreen .submissions-status.is-scrollable {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 16px);
+  mask-image: linear-gradient(90deg, transparent 0, #000 16px);
+}
+#gameScreen.solo-mode .submissions-status { display: none; }
 
 #gameScreen .game-play {
   display: flex;
@@ -1321,6 +1405,7 @@ body.timer-critical::before {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  justify-content: flex-end;
   gap: 7px;
   width: 100%;
   max-width: 100%;
@@ -1400,6 +1485,9 @@ body.timer-critical::before {
    State classes are deliberately not `.error`/`.success`, which would inherit
    the global `.error { display: none }` rule. */
 .word-feedback {
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
   height: 17px;
   min-height: 17px;
   margin: 0;
@@ -1420,33 +1508,35 @@ body.timer-critical::before {
 #gameScreen .game-keyboard {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
+  margin: 0;
   user-select: none;
   -webkit-user-select: none;
 }
 #gameScreen .keyboard-row {
   display: flex;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
 }
 #gameScreen .keyboard-row-2 { padding: 0 4.5%; }
+#gameScreen .keyboard-row-3 { padding: 0; }
 #gameScreen .word-key {
   display: inline-flex;
   flex: 1 1 0;
   align-items: center;
   justify-content: center;
   min-width: 0;
-  height: 46px;
+  height: 48px;
   padding: 0;
   background: var(--bg-panel);
   border: 2px solid var(--text-medium);
-  border-radius: var(--radius-card);
+  border-radius: 8px;
   box-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
   color: var(--text-strong);
   font-family: var(--font-mono);
-  font-size: clamp(13px, 2.9vw, 17px);
+  font-size: clamp(14px, 3vw, 18px);
   font-weight: 800;
   line-height: 1;
   cursor: pointer;
@@ -1468,18 +1558,18 @@ body.timer-critical::before {
   transform: none;
 }
 #gameScreen .word-key-wide {
-  flex-grow: 1.8;
-  font-size: calc(11px * var(--text-scale));
+  flex-grow: 1.7;
+  font-size: calc(18px * var(--text-scale));
   letter-spacing: 0.3px;
 }
 #gameScreen .word-key-hyphen {
   font-family: var(--font-body);
-  font-size: calc(15px * var(--text-scale));
+  font-size: calc(18px * var(--text-scale));
 }
 
 #gameScreen .game-submit-btn {
   width: 100%;
-  min-height: 50px;
+  min-height: 48px;
   flex: 0 0 auto;
   letter-spacing: 2px;
 }
@@ -1495,6 +1585,21 @@ body.timer-critical::before {
   flex-wrap: nowrap;
 }
 #gameScreen #gameReactions .reaction-btn {
+  flex: 0 1 36px;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  aspect-ratio: 1;
+  font-size: 18px;
+}
+
+/* Result reactions use the same single-row shrink so the 8th emoji never
+   orphans onto its own line on a 390px phone. */
+#resultScreen #resultReactions {
+  flex-wrap: nowrap;
+  gap: clamp(3px, 1vw, 6px);
+}
+#resultScreen #resultReactions .reaction-btn {
   flex: 0 1 36px;
   width: auto;
   height: auto;
@@ -1858,6 +1963,45 @@ body.timer-critical::before {
   border-color: var(--neon-magenta);
   font-size: calc(22px * var(--text-scale));
   font-style: normal;
+}
+
+.solo-end-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 360px;
+  margin: -6px 0 10px;
+  padding: 8px 14px;
+  border: 2px solid var(--neon-yellow);
+  border-radius: var(--radius-card);
+  background: rgba(255, 233, 61, 0.06);
+  color: var(--neon-yellow);
+  font-family: var(--font-mono);
+  font-size: calc(15px * var(--text-scale));
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+.solo-end-summary strong {
+  font-size: calc(19px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+.solo-new-best {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: var(--neon-green);
+  color: var(--text-on-light);
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  animation: newBestPulse 0.9s ease-in-out infinite alternate;
+}
+@keyframes newBestPulse {
+  from { transform: scale(1); }
+  to   { transform: scale(1.06); }
 }
 
 /* =========================================================================
@@ -2884,9 +3028,11 @@ html:has(#gameScreen.active) #disconnectBanner { display: none; }
     height: 32px;
     max-height: 32px;
   }
-  #gameScreen .game-play { gap: 8px; }
+  #gameScreen .game-play { gap: 7px; }
   #gameScreen .tiles { gap: 12px; }
-  #gameScreen .score-hint { padding: 7px 12px; }
+  #gameScreen .score-hint { padding: 5px 8px; }
+  #gameScreen .score-hint-row,
+  #gameScreen .score-hint-opponent { height: 16px; }
 }
 
 /* Compact portrait: iPhone SE / 360-class phones. Still all controls visible. */
@@ -2894,7 +3040,7 @@ html:has(#gameScreen.active) #disconnectBanner { display: none; }
   #gameScreen.active {
     gap: 7px;
     padding-top: max(6px, env(safe-area-inset-top));
-    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
   }
   #gameScreen .game-header { gap: 5px; }
   #gameScreen .round-info { padding: 6px 8px; font-size: calc(13px * var(--text-scale)); }
@@ -2910,8 +3056,11 @@ html:has(#gameScreen.active) #disconnectBanner { display: none; }
     height: calc(70px * var(--tile-scale));
     font-size: calc(32px * var(--tile-scale));
   }
-  #gameScreen .score-hint { padding: 5px 10px; font-size: calc(13px * var(--text-scale)); }
-  #gameScreen .score-hint-row strong { font-size: calc(16px * var(--text-scale)); }
+  #gameScreen .score-hint { padding: 4px 8px; font-size: calc(12px * var(--text-scale)); }
+  #gameScreen .score-hint-row strong { font-size: calc(14px * var(--text-scale)); }
+  #gameScreen .score-hint-row,
+  #gameScreen .score-hint-opponent { height: 15px; }
+  #gameScreen .score-hint-opp-score { font-size: calc(13px * var(--text-scale)); }
   #gameScreen .score-hint-divider { height: 18px; }
   #gameScreen .timer { gap: 0; }
   #gameScreen .timer-bar { height: 9px; }
@@ -2942,9 +3091,9 @@ html:has(#gameScreen.active) #disconnectBanner { display: none; }
     gap: 4px;
     padding:
       max(4px, env(safe-area-inset-top))
-      max(8px, env(safe-area-inset-right))
-      max(8px, env(safe-area-inset-bottom))
-      max(8px, env(safe-area-inset-left));
+      max(6px, env(safe-area-inset-right))
+      env(safe-area-inset-bottom)
+      max(6px, env(safe-area-inset-left));
   }
   #gameScreen .game-header { gap: 4px; }
   #gameScreen .round-info { padding: 4px 6px; font-size: calc(12px * var(--text-scale)); }
@@ -2959,8 +3108,11 @@ html:has(#gameScreen.active) #disconnectBanner { display: none; }
     font-size: calc(26px * var(--tile-scale));
   }
   #gameScreen .tiles { gap: 10px; }
-  #gameScreen .score-hint { padding: 3px 8px; font-size: calc(12px * var(--text-scale)); }
-  #gameScreen .score-hint-row strong { font-size: calc(14px * var(--text-scale)); }
+  #gameScreen .score-hint { padding: 3px 6px; font-size: calc(11px * var(--text-scale)); }
+  #gameScreen .score-hint-row strong { font-size: calc(13px * var(--text-scale)); }
+  #gameScreen .score-hint-row,
+  #gameScreen .score-hint-opponent { height: 14px; }
+  #gameScreen .score-hint-opp-score { font-size: calc(12px * var(--text-scale)); }
   #gameScreen .score-hint-divider { height: 15px; }
   #gameScreen .timer-bar { height: 7px; }
   #gameScreen .timer-display { font-size: 23px; }
@@ -2981,69 +3133,121 @@ html:has(#gameScreen.active) #disconnectBanner { display: none; }
   #gameScreen #gameReactions { gap: 4px; }
 }
 
-/* Short landscape: play left, answer + keyboard + submit right. */
+/* Short landscape: one native-like stack. The answer/timer band is arranged
+   horizontally so the global bottom-up order (keyboard -> submit -> reactions
+   -> content) still holds without scrolling or clipping. */
 @media (orientation: landscape) and (max-height: 520px) {
   #gameScreen.active {
-    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
-      "header header"
-      "play input"
-      "react input";
-    gap: 6px 18px;
+      "header"
+      "play"
+      "react"
+      "input";
+    gap: 4px;
     max-width: 680px;
     padding:
       max(4px, env(safe-area-inset-top))
       max(10px, env(safe-area-inset-right))
-      max(8px, env(safe-area-inset-bottom))
+      env(safe-area-inset-bottom)
       max(10px, env(safe-area-inset-left));
   }
   #gameScreen .game-header { gap: 8px; align-items: center; }
   #gameScreen .submissions-status { max-height: 30px; }
 
-  #gameScreen .game-play { justify-content: center; gap: 8px; }
-  #gameScreen .tile {
-    width: calc(72px * var(--tile-scale));
-    height: calc(72px * var(--tile-scale));
-    font-size: calc(34px * var(--tile-scale));
+  #gameScreen .game-play {
+    display: grid;
+    grid-template-columns: minmax(96px, 0.8fr) minmax(0, 1.1fr) minmax(0, 1.1fr);
+    grid-template-areas:
+      "score score score"
+      "tiles timer word"
+      "tiles feedback feedback";
+    align-content: center;
+    align-items: center;
+    gap: 2px 8px;
+    min-height: 0;
   }
-  #gameScreen .tiles { gap: 12px; }
-  #gameScreen .score-hint { max-width: 100%; padding: 4px 8px; font-size: calc(13px * var(--text-scale)); }
-  #gameScreen .score-hint-row { gap: 5px; }
-  #gameScreen .score-hint-row strong { font-size: calc(15px * var(--text-scale)); }
-  #gameScreen .score-hint-divider { height: 16px; }
-  #gameScreen .timer { max-width: 240px; }
-  #gameScreen .timer-bar { height: 8px; }
-  #gameScreen .timer-display { font-size: 26px; }
-  #gameScreen .timer-text-label { font-size: calc(8px * var(--text-scale)); }
+  #gameScreen .tiles { grid-area: tiles; gap: 8px; margin: 0; align-self: center; }
+  #gameScreen .tile {
+    width: clamp(46px, 14vh, 60px);
+    height: clamp(46px, 14vh, 60px);
+    border-width: 3px;
+    font-size: calc(26px * var(--tile-scale));
+  }
+  #gameScreen .score-hint {
+    grid-area: score;
+    align-self: end;
+    max-width: 100%;
+    padding: 2px 6px;
+    font-size: calc(11px * var(--text-scale));
+    gap: 2px 4px;
+  }
+  #gameScreen .score-hint-row,
+  #gameScreen .score-hint-opponent { gap: 2px; height: 13px; }
+  #gameScreen .score-hint-row strong { font-size: calc(12px * var(--text-scale)); }
+  #gameScreen .score-hint-opp-score { padding-left: 2px; font-size: calc(11px * var(--text-scale)); }
+  #gameScreen .dot { width: 8px; height: 8px; }
+  #gameScreen .timer {
+    grid-area: timer;
+    align-self: center;
+    max-width: none;
+    gap: 0;
+  }
+  #gameScreen .timer-bar { height: 6px; }
+  #gameScreen .timer-display { font-size: 20px; }
+  #gameScreen .timer-text-label { display: none; }
 
-  #gameScreen .game-input-zone { justify-content: center; height: 100%; gap: 6px; }
-  #gameScreen .word-display { min-height: 40px; padding: 5px 10px; font-size: clamp(14px, 3vw, 19px); }
-  #gameScreen .word-display.empty { font-size: calc(11px * var(--text-scale)); }
-  #gameScreen .word-feedback { height: 14px; min-height: 14px; font-size: calc(10px * var(--text-scale)); }
+  #gameScreen .word-display {
+    grid-area: word;
+    align-self: center;
+    min-height: 30px;
+    padding: 2px 8px;
+    font-size: clamp(12px, 2.6vw, 17px);
+  }
+  #gameScreen .word-display.empty { font-size: calc(10px * var(--text-scale)); letter-spacing: 1px; }
+  #gameScreen .word-feedback {
+    grid-area: feedback;
+    align-self: start;
+    height: 12px;
+    min-height: 12px;
+    font-size: calc(9px * var(--text-scale));
+  }
+
+  #gameScreen .game-input-zone { justify-content: flex-end; height: 100%; gap: 4px; }
   #gameScreen .game-keyboard { gap: 4px; }
   #gameScreen .keyboard-row { gap: 4px; }
-  #gameScreen .word-key { height: 37px; font-size: calc(12px * var(--text-scale)); }
-  #gameScreen .word-key-wide { font-size: calc(9px * var(--text-scale)); }
-  #gameScreen .game-submit-btn { min-height: 38px; padding: 8px 12px; font-size: calc(12px * var(--text-scale)); }
-  #gameScreen #gameReactions { align-self: end; gap: 4px; }
-  #gameScreen #gameReactions .reaction-btn { flex-basis: 28px; font-size: 14px; }
+  #gameScreen .word-key {
+    height: clamp(28px, 8.5vh, 36px);
+    font-size: calc(12px * var(--text-scale));
+    border-radius: 6px;
+  }
+  #gameScreen .word-key-wide { font-size: calc(15px * var(--text-scale)); }
+  #gameScreen .word-key-hyphen { font-size: calc(15px * var(--text-scale)); }
+  #gameScreen .game-submit-btn {
+    min-height: clamp(30px, 9vh, 38px);
+    padding: 6px 12px;
+    font-size: calc(12px * var(--text-scale));
+  }
+  #gameScreen #gameReactions { gap: 4px; }
+  #gameScreen #gameReactions .reaction-btn { flex-basis: 26px; font-size: 13px; }
 }
 
 /* Extra-short landscape also survives notched safe-area padding. */
 @media (orientation: landscape) and (max-height: 340px) {
-  #gameScreen.active { gap: 4px 14px; }
-  #gameScreen .game-play { gap: 5px; }
+  #gameScreen.active { gap: 3px; }
   #gameScreen .tile {
-    width: calc(64px * var(--tile-scale));
-    height: calc(64px * var(--tile-scale));
-    font-size: calc(30px * var(--tile-scale));
+    width: calc(46px * var(--tile-scale));
+    height: calc(46px * var(--tile-scale));
+    font-size: calc(23px * var(--tile-scale));
   }
-  #gameScreen .word-display { min-height: 36px; }
-  #gameScreen .word-feedback { height: 13px; min-height: 13px; }
-  #gameScreen .word-key { height: 34px; }
-  #gameScreen .game-submit-btn { min-height: 36px; }
-  #gameScreen #gameReactions .reaction-btn { flex-basis: 26px; font-size: 13px; }
+  #gameScreen .score-hint { padding: 1px 5px; }
+  #gameScreen .score-hint-row,
+  #gameScreen .score-hint-opponent { height: 12px; }
+  #gameScreen .word-display { min-height: 28px; }
+  #gameScreen .word-key { height: 28px; }
+  #gameScreen .game-submit-btn { min-height: 30px; }
+  #gameScreen #gameReactions .reaction-btn { flex-basis: 24px; font-size: 12px; }
 }
 
 /* Comfort Mode needs a little extra compact spacing on short portrait phones.

@@ -50,17 +50,46 @@ let pageHiding = false;
 // token. A refresh usually frees the old transport within the first attempt.
 const RESUME_RETRY_DELAYS = [400, 800, 1500, 2500, 4000, 6000, 9000];
 
-const socket = io({
-  // Function form: read the token again for every reconnect attempt, including
-  // attempts that happen after SESSION_EXPIRED cleared it.
-  auth: (callback) => callback({ resumeToken: readResumeToken() }),
-  transports: isIOS ? ['polling', 'websocket'] : ['websocket', 'polling'],
-  reconnection: true,
-  reconnectionAttempts: 10,
-  reconnectionDelay: 1000,
-  reconnectionDelayMax: 5000,
-  timeout: 20000
-});
+// Solo mode must boot even when the page is served without the Socket.IO client
+// bundle (offline/static hosting). Multiplayer still uses the real client when
+// it is available; the fallback keeps every top-level socket registration safe.
+function createUnavailableSocket() {
+  const handlers = new Map();
+  const unavailable = {
+    connected: false,
+    on(event, callback) {
+      if (!handlers.has(event)) handlers.set(event, []);
+      handlers.get(event).push(callback);
+      return unavailable;
+    },
+    emit() { return unavailable; },
+    connect() { return unavailable; },
+    disconnect() { return unavailable; }
+  };
+  return unavailable;
+}
+
+function createSocketClient() {
+  if (typeof io !== 'function') return createUnavailableSocket();
+  try {
+    return io({
+      // Function form: read the token again for every reconnect attempt, including
+      // attempts that happen after SESSION_EXPIRED cleared it.
+      auth: (callback) => callback({ resumeToken: readResumeToken() }),
+      transports: isIOS ? ['polling', 'websocket'] : ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    });
+  } catch (error) {
+    console.warn('Socket.IO unavailable — multiplayer disabled:', error);
+    return createUnavailableSocket();
+  }
+}
+
+const socket = createSocketClient();
 
 function serverNow() {
   return Date.now() + serverClockOffset;
@@ -189,6 +218,17 @@ function refreshInputAvailability() {
   const open = typeof isWordInputOpen === 'function' && isWordInputOpen();
   if (typeof setKeyboardEnabled === 'function') setKeyboardEnabled(open);
 
+  if (soloMode) {
+    // Solo never depends on transport/registration state. Only replace a stale
+    // connection message if the local round is still open.
+    const soloFeedback = $('wordFeedback');
+    if (open && soloFeedback &&
+        (soloFeedback.textContent === 'Reconnecting…' || soloFeedback.textContent === 'Offline')) {
+      setWordFeedback(WORD_DEFAULT_FEEDBACK);
+    }
+    return;
+  }
+
   if ((!socket.connected || browserOffline) && isGameScreenActive() && !submitted) {
     setWordFeedback(browserOffline ? 'Offline' : 'Reconnecting…', 'error');
     return;
@@ -201,6 +241,7 @@ function refreshInputAvailability() {
 }
 
 function syncComfortMode() {
+  if (soloMode) return;
   // Always send the stored preference, including false. The server session
   // can outlive this page's localStorage/offline toggles, so only emitting
   // "true" would leave a stale comfort duration after reconnect.
@@ -327,6 +368,26 @@ let roundScores = { me: 0, opp: 0 }; // live score feed for the always-visible h
 let disconnectPlayers = new Map(); // playerId -> name, survives multi-disconnect banners
 let finishedGameEnd = null; // stored finished payload; membership changes must not re-render it
 let finishedVoterIds = []; // authoritative play-again voter ids for the current finished room
+
+// === Solo mode (local only, no server/socket) ===
+const SOLO_BEST_STORAGE_KEY = 'wb_solo_best_v1';
+const SOLO_PLAYER_ID = 'solo-player';
+const SOLO_TOTAL_ROUNDS = 10;
+const SOLO_ROUND_MS = 10000;
+const SOLO_BONUS_WINDOW_MS = 3000;
+const SOLO_RESULT_PAUSE_MS = 2600;
+let soloMode = false;
+let soloActive = false;
+let soloRound = 0;
+let soloScore = 0;
+let soloMatchId = null;
+let soloRoundStartTime = 0;
+let soloSubmission = null;
+let soloRoundEnding = false;
+let soloAdvanceTimer = null;
+let soloPreviousBest = 0;
+let soloBest = 0;
+let soloReturnScreen = 'nameScreen';
 
 const $ = id => document.getElementById(id);
 
@@ -469,6 +530,38 @@ function loadProfile() {
 }
 function saveProfile(profile) {
   localStorage.setItem(STORAGE_PROFILE, JSON.stringify(profile));
+}
+
+// === Solo best score (versioned localStorage, corrupt-safe) ===
+function loadSoloBest() {
+  try {
+    const raw = localStorage.getItem(SOLO_BEST_STORAGE_KEY);
+    if (raw === null || raw === '') return 0;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return Math.floor(value);
+  } catch (error) {
+    return 0;
+  }
+}
+
+function saveSoloBest(value) {
+  const normalized = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  try {
+    localStorage.setItem(SOLO_BEST_STORAGE_KEY, String(normalized));
+  } catch (error) {
+    // Storage can be blocked in privacy mode; the run still works in memory.
+  }
+}
+
+function renderSoloBestBadges() {
+  const label = `BEST ${soloBest}`;
+  const nameBadge = $('soloBestName');
+  const lobbyBadge = $('soloBestLobby');
+  const endBadge = $('soloBestEnd');
+  if (nameBadge) nameBadge.textContent = label;
+  if (lobbyBadge) lobbyBadge.textContent = label;
+  if (endBadge) endBadge.textContent = String(soloBest);
 }
 
 // === Comfort Mode ===
@@ -968,6 +1061,7 @@ function setRoster(list, hostId) {
     if (player.connected === false) disconnectPlayers.set(player.id, player.name);
   }
   renderDisconnectBanner();
+  syncScoresFromRoster();
 }
 
 function syncScoresFromRoster() {
@@ -1078,6 +1172,7 @@ function applyRoomEntry(data) {
 // path that re-places a refreshed client into lobby/playing/paused/finished.
 function applyRoomStateSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return;
+  if (soloMode) return; // a live solo run owns the UI until it exits
 
   cancelResumeRetry();
   resumeConflict = false;
@@ -1166,7 +1261,7 @@ document.querySelectorAll('.reaction-btn').forEach(btn => {
     const x = rect.left + rect.width / 2 - 12;
     const y = rect.top - 10;
     showFloatingReaction(emoji, x, y);
-    emitIfConnected('sendReaction', emoji);
+    if (!soloMode) emitIfConnected('sendReaction', emoji);
   });
 });
 
@@ -1428,6 +1523,11 @@ function submitNameFromInput() {
 
 $('enterLobbyBtn').addEventListener('click', submitNameFromInput);
 
+const soloBtn = $('soloBtn');
+if (soloBtn) soloBtn.addEventListener('click', startSoloRun);
+const lobbySoloBtn = $('lobbySoloBtn');
+if (lobbySoloBtn) lobbySoloBtn.addEventListener('click', startSoloRun);
+
 $('playerNameInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') submitNameFromInput();
 });
@@ -1529,6 +1629,13 @@ function isGameScreenActive() {
 }
 
 function isWordInputOpen() {
+  if (soloMode) {
+    return isGameScreenActive() &&
+      soloActive &&
+      !submitted &&
+      !!roundDeadline &&
+      Date.now() < roundDeadline;
+  }
   return isGameScreenActive() &&
     socket.connected &&
     !browserOffline &&
@@ -1623,9 +1730,10 @@ function deleteLastLetter() {
 function handleWordSubmit() {
   if (!isGameScreenActive() || submitted) return;
 
-  // No offline replay: a submission typed while the transport or restore is
-  // not ready is dropped, not buffered for later.
-  if (!socket.connected || browserOffline || !authoritativeReady) {
+  // No offline replay: a multiplayer submission typed while the transport or
+  // restore is not ready is dropped, not buffered for later. Solo is local and
+  // never consults socket state.
+  if (!soloMode && (!socket.connected || browserOffline || !authoritativeReady)) {
     setWordFeedback(browserOffline ? 'Offline' : 'Reconnecting…', 'error');
     showToast(browserOffline
       ? 'You are offline — try again when the connection returns'
@@ -1633,9 +1741,11 @@ function handleWordSubmit() {
     return;
   }
 
-  if (!roundDeadline || serverNow() >= roundDeadline) {
+  const nowMs = soloMode ? Date.now() : serverNow();
+  if (!roundDeadline || nowMs >= roundDeadline) {
     setWordFeedback("Time's up", 'error');
     setKeyboardEnabled(false);
+    if (soloMode && soloActive && !soloRoundEnding) endSoloRound();
     return;
   }
 
@@ -1674,6 +1784,18 @@ function handleWordSubmit() {
       $('tile2').classList.remove('glow-burst');
     }, 600);
   }
+
+  if (soloMode) {
+    const timeTaken = Math.max(0, (Date.now() - soloRoundStartTime) / 1000);
+    soloSubmission = { word, isValid: true, timeTaken };
+    announce(`Word submitted: ${word}. Waiting for round to end.`);
+    // Let the locked display and success feedback land before the result screen.
+    setTimeout(() => {
+      if (soloMode && soloActive && !soloRoundEnding) endSoloRound();
+    }, 250);
+    return;
+  }
+
   socket.emit('submitWord', {
     word,
     matchId: currentMatchId,
@@ -1782,20 +1904,36 @@ document.addEventListener('paste', (e) => {
 });
 
 // Keep the newest submission chip visible in the one-row status strip without
-// changing the strip's height (which would move the keyboard).
+// changing the strip's height (which would move the keyboard). The fade only
+// appears when the strip actually overflows, so a partly-scrolled chip reads as
+// scrollable rather than clipped.
 const submissionsEl = $('submissionsStatus');
+function updateSubmissionOverflow() {
+  if (!submissionsEl) return;
+  submissionsEl.classList.toggle(
+    'is-scrollable',
+    submissionsEl.scrollWidth > submissionsEl.clientWidth + 1
+  );
+}
 if (submissionsEl && window.MutationObserver) {
   new MutationObserver(() => {
     requestAnimationFrame(() => {
       submissionsEl.scrollLeft = submissionsEl.scrollWidth;
+      updateSubmissionOverflow();
     });
   }).observe(submissionsEl, { childList: true });
+  window.addEventListener('resize', updateSubmissionOverflow);
+  updateSubmissionOverflow();
 }
 
 // === End screen buttons ===
 let playAgainVoted = false;
 
 $('playAgainBtn').addEventListener('click', () => {
+  if (soloMode) {
+    startSoloRun();
+    return;
+  }
   if (playAgainVoted) return;
   emitRoomCommand('requestPlayAgain');
 });
@@ -1803,6 +1941,10 @@ $('playAgainBtn').addEventListener('click', () => {
 // Explicit return-to-lobby also waits for the server's roomLeft ack. Unload
 // never calls this (it is a transport disconnect only).
 $('returnToLobbyBtn').addEventListener('click', () => {
+  if (soloMode) {
+    exitSoloMode();
+    return;
+  }
   emitRoomCommand('returnToLobby');
 });
 
@@ -1933,13 +2075,328 @@ $('saveProfileBtn').addEventListener('click', () => {
 });
 
 // === Always-visible score hint ===
+// The visible rows are keyed by stable player id and updated in place. That
+// keeps the polite live region from re-announcing the whole roster whenever one
+// score changes; ordering is score-descending with roster order as tie-break.
 function updateScoreHint() {
+  const container = $('scoreHint');
   const me = $('scoreHintYou');
-  const opp = $('scoreHintOpp');
-  if (me) me.textContent = roundScores.me;
-  if (opp) opp.textContent = roundScores.opp;
+  if (!container) return;
+
+  const myScore = soloMode ? soloScore : roundScores.me;
+  if (me) me.textContent = myScore;
+
+  const meRow = $('scoreHintMeRow');
+  if (meRow) meRow.setAttribute('aria-label', `You: ${myScore} ${myScore === 1 ? 'point' : 'points'}`);
+
+  const bestRow = $('scoreHintBestRow');
+  const bestEl = $('scoreHintBest');
+  const emptyEl = $('scoreHintEmpty');
+
+  if (soloMode) {
+    if (bestRow) {
+      bestRow.hidden = false;
+      bestRow.setAttribute('aria-label', `Best score: ${soloBest} ${soloBest === 1 ? 'point' : 'points'}`);
+    }
+    if (bestEl) bestEl.textContent = soloBest;
+    if (emptyEl) emptyEl.hidden = true;
+    container.querySelectorAll('.score-hint-opponent').forEach(el => el.remove());
+    return;
+  }
+
+  if (bestRow) bestRow.hidden = true;
+
+  const ordered = players
+    .map((player, index) => ({
+      id: player.id,
+      name: player.name || 'Player',
+      score: Number(player.score) || 0,
+      index
+    }))
+    .filter(player => player.id !== myPlayerId)
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+
+  if (emptyEl) emptyEl.hidden = ordered.length > 0;
+
+  const existing = new Map();
+  container.querySelectorAll('.score-hint-opponent').forEach(el => {
+    if (el.dataset.pid) existing.set(el.dataset.pid, el);
+    else el.remove();
+  });
+  for (const [pid, el] of existing) {
+    if (!ordered.some(player => player.id === pid)) el.remove();
+  }
+
+  const nodes = new Map();
+  for (const player of ordered) {
+    let el = existing.get(player.id);
+    if (!el) {
+      el = document.createElement('span');
+      el.className = 'score-hint-opponent';
+      el.dataset.pid = player.id;
+      const nameEl = document.createElement('span');
+      nameEl.className = 'score-hint-opp-name';
+      nameEl.setAttribute('aria-hidden', 'true');
+      const scoreEl = document.createElement('span');
+      scoreEl.className = 'score-hint-opp-score';
+      scoreEl.setAttribute('aria-hidden', 'true');
+      el.appendChild(nameEl);
+      el.appendChild(scoreEl);
+    }
+    const nameEl = el.querySelector('.score-hint-opp-name');
+    const scoreEl = el.querySelector('.score-hint-opp-score');
+    if (nameEl && nameEl.textContent !== player.name) nameEl.textContent = player.name;
+    if (scoreEl && scoreEl.textContent !== String(player.score)) scoreEl.textContent = player.score;
+    el.dataset.name = player.name;
+    el.dataset.score = String(player.score);
+    const label = `${player.name}: ${player.score} ${player.score === 1 ? 'point' : 'points'}`;
+    if (el.getAttribute('aria-label') !== label) el.setAttribute('aria-label', label);
+    if (el.title !== label) el.title = label;
+    nodes.set(player.id, el);
+  }
+
+  const currentOrder = [...container.querySelectorAll('.score-hint-opponent')]
+    .map(el => el.dataset.pid)
+    .join('|');
+  const targetOrder = ordered.map(player => player.id).join('|');
+  if (currentOrder !== targetOrder) {
+    for (const player of ordered) container.appendChild(nodes.get(player.id));
+  }
 }
 updateScoreHint();
+
+// === Solo mode ===
+// A complete local match using the same dictionary, pair pool, round screens
+// and timer. No room/socket commands are ever emitted from this path.
+function pickSoloPair() {
+  const pairs = Object.keys(wordLookupClient)
+    .filter(key => wordLookupClient[key] && wordLookupClient[key].size > 0);
+  if (!pairs.length) return null;
+  const key = pairs[Math.floor(Math.random() * pairs.length)];
+  return [key[0].toUpperCase(), key[1].toUpperCase()];
+}
+
+function getSoloExamples(pair) {
+  if (!Array.isArray(pair) || pair.length < 2) return null;
+  const words = wordLookupClient[(pair[0] + pair[1]).toLowerCase()];
+  if (!words || !words.size) return null;
+  return [...words].slice(0, 5);
+}
+
+function startSoloRun() {
+  const pairs = Object.keys(wordLookupClient)
+    .filter(key => wordLookupClient[key] && wordLookupClient[key].size > 0);
+  if (!pairs.length) {
+    showToast('Dictionary is still loading — try again in a moment');
+    return;
+  }
+
+  if (!soloMode) {
+    soloReturnScreen = document.querySelector('.screen.active')?.id === 'lobbyScreen'
+      ? 'lobbyScreen'
+      : 'nameScreen';
+  }
+
+  clearTimeout(soloAdvanceTimer);
+  soloAdvanceTimer = null;
+  stopPhaseTimers();
+  hideDisconnectBanners();
+
+  soloMode = true;
+  soloActive = true;
+  soloRound = 0;
+  soloScore = 0;
+  soloRoundStartTime = 0;
+  soloSubmission = null;
+  soloRoundEnding = false;
+  soloMatchId = 'solo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  soloPreviousBest = Math.max(loadSoloBest(), soloBest || 0);
+  soloBest = soloPreviousBest;
+  roundScores = { me: 0, opp: 0 };
+  roomCategories = { noun_adj_verb: true, countries: true, us_states: true, us_cities: true };
+
+  const gameScreen = $('gameScreen');
+  if (gameScreen) gameScreen.classList.add('solo-mode');
+  document.body.classList.add('solo-mode');
+  const roomCode = $('gameRoomCode');
+  if (roomCode) {
+    roomCode.textContent = 'SOLO';
+    roomCode.setAttribute('aria-label', 'Solo mode');
+  }
+  const soloSummary = $('soloEndSummary');
+  if (soloSummary) soloSummary.hidden = true;
+  const newBestBadge = $('soloNewBestBadge');
+  if (newBestBadge) newBestBadge.hidden = true;
+  const playAgain = $('playAgainBtn');
+  if (playAgain) playAgain.style.display = 'none';
+  const returnButton = $('returnToLobbyBtn');
+  if (returnButton) returnButton.textContent = 'MAIN MENU';
+
+  renderSoloBestBadges();
+  startSoloRound();
+}
+
+function startSoloRound() {
+  if (!soloMode || !soloActive) return;
+  clearTimeout(soloAdvanceTimer);
+  soloAdvanceTimer = null;
+
+  if (soloRound >= SOLO_TOTAL_ROUNDS) {
+    finishSoloRun();
+    return;
+  }
+
+  const pair = pickSoloPair();
+  if (!pair) {
+    showToast('No solo word pairs are available');
+    exitSoloMode();
+    return;
+  }
+
+  soloRound += 1;
+  soloSubmission = null;
+  soloRoundEnding = false;
+  soloRoundStartTime = Date.now();
+  roundDeadline = soloRoundStartTime + SOLO_ROUND_MS;
+  currentRoundDuration = SOLO_ROUND_MS;
+  currentRound = soloRound;
+  totalRounds = SOLO_TOTAL_ROUNDS;
+  currentStartLetter = pair[0];
+  currentEndLetter = pair[1];
+  currentMatchId = soloMatchId;
+  roundScores = { me: soloScore, opp: 0 };
+
+  applyRoundStart({
+    round: soloRound,
+    totalRounds: SOLO_TOTAL_ROUNDS,
+    startLetter: pair[0],
+    endLetter: pair[1],
+    deadline: roundDeadline,
+    timeLeft: SOLO_ROUND_MS / 1000,
+    matchId: soloMatchId
+  }, { solo: true });
+  updateScoreHint();
+}
+
+function endSoloRound() {
+  if (!soloMode || !soloActive || soloRoundEnding) return;
+  soloRoundEnding = true;
+  stopPhaseTimers();
+  roundDeadline = null;
+
+  const submission = soloSubmission;
+  const isValid = !!(submission && submission.isValid);
+  const bonus = isValid && submission.timeTaken <= (SOLO_BONUS_WINDOW_MS / 1000) ? 1 : 0;
+  const points = isValid ? 1 + bonus : 0;
+  soloScore += points;
+  roundScores = { me: soloScore, opp: 0 };
+
+  const pair = [currentStartLetter, currentEndLetter];
+  const result = {
+    playerId: SOLO_PLAYER_ID,
+    name: 'You',
+    word: isValid ? submission.word : '(no submission)',
+    isValid,
+    timeTaken: isValid ? submission.timeTaken : null,
+    points,
+    bonus,
+    totalScore: soloScore
+  };
+  soloSubmission = null;
+
+  applyRoundEnd({
+    results: [result],
+    pair,
+    round: soloRound,
+    totalRounds: SOLO_TOTAL_ROUNDS,
+    examples: getSoloExamples(pair)
+  }, { solo: true });
+  updateScoreHint();
+
+  // Keep the ending guard set until the next round starts. A submit-side
+  // timeout can race the 10s timer; it must not score the same round twice.
+  const finalRound = soloRound >= SOLO_TOTAL_ROUNDS;
+  soloAdvanceTimer = setTimeout(() => {
+    soloAdvanceTimer = null;
+    if (!soloMode || !soloActive) return;
+    if (finalRound) finishSoloRun();
+    else startSoloRound();
+  }, SOLO_RESULT_PAUSE_MS);
+}
+
+function finishSoloRun() {
+  if (!soloMode) return;
+  clearTimeout(soloAdvanceTimer);
+  soloAdvanceTimer = null;
+  stopPhaseTimers();
+  roundDeadline = null;
+  soloActive = false;
+
+  const newBest = soloScore > soloPreviousBest;
+  if (newBest) {
+    soloBest = soloScore;
+    saveSoloBest(soloScore);
+  }
+  renderSoloBestBadges();
+
+  applyGameEnd({
+    players: [{ id: SOLO_PLAYER_ID, name: 'You' }],
+    rankings: [{ id: SOLO_PLAYER_ID, name: 'You', score: soloScore }],
+    winnerId: SOLO_PLAYER_ID,
+    isTie: false,
+    canPlayAgain: true,
+    solo: true,
+    newBest,
+    best: soloBest
+  }, { solo: true, newBest });
+}
+
+function exitSoloMode(targetScreen = soloReturnScreen) {
+  clearTimeout(soloAdvanceTimer);
+  soloAdvanceTimer = null;
+  stopPhaseTimers();
+
+  soloMode = false;
+  soloActive = false;
+  soloRound = 0;
+  soloScore = 0;
+  soloRoundStartTime = 0;
+  soloSubmission = null;
+  soloRoundEnding = false;
+  roundDeadline = null;
+  currentRound = 0;
+  currentMatchId = null;
+  currentStartLetter = null;
+  currentEndLetter = null;
+  submitted = false;
+  currentWord = '';
+
+  const gameScreen = $('gameScreen');
+  if (gameScreen) gameScreen.classList.remove('solo-mode');
+  document.body.classList.remove('solo-mode');
+  const roomCode = $('gameRoomCode');
+  if (roomCode) {
+    roomCode.textContent = '';
+    roomCode.setAttribute('aria-label', 'Room code');
+  }
+  const soloSummary = $('soloEndSummary');
+  if (soloSummary) soloSummary.hidden = true;
+  const newBestBadge = $('soloNewBestBadge');
+  if (newBestBadge) newBestBadge.hidden = true;
+  const playAgain = $('playAgainBtn');
+  if (playAgain) playAgain.style.display = 'none';
+  const returnButton = $('returnToLobbyBtn');
+  if (returnButton) returnButton.textContent = 'RETURN TO LOBBY';
+
+  roundScores = { me: 0, opp: 0 };
+  resetWordEntry();
+  updateScoreHint();
+  renderSoloBestBadges();
+
+  const target = targetScreen === 'lobbyScreen' ? 'lobbyScreen' : 'nameScreen';
+  showScreen(target, true);
+  if (target === 'lobbyScreen') renderRoomLobby();
+}
 
 // === Round / game events ===
 // nameConfirmed is identity/profile only. Screen routing is always driven by
@@ -1974,6 +2431,7 @@ socket.on('nameConfirmed', (data) => {
     if (me) {
       me.name = myName;
       if (myRoomCode) renderRoomLobby();
+      updateScoreHint();
     }
     return;
   }
@@ -1982,6 +2440,7 @@ socket.on('nameConfirmed', (data) => {
   if (me && me.name !== myName) {
     me.name = myName;
     if (myRoomCode) renderRoomLobby();
+    updateScoreHint();
   }
 
   syncComfortMode();
@@ -2042,6 +2501,7 @@ socket.on('playerJoined', (data) => {
     disconnectPlayers.delete(incoming.id);
     renderDisconnectBanner();
   }
+  syncScoresFromRoster();
   renderRoomLobby();
 });
 
@@ -2079,6 +2539,7 @@ socket.on('playerUpdated', (data) => {
   }
   const me = players.find(p => p.id === myPlayerId);
   if (me && me.name) myName = me.name;
+  syncScoresFromRoster();
   renderRoomLobby();
   recomputeFinishedRematch();
 });
@@ -2105,6 +2566,7 @@ socket.on('playerLeft', (data) => {
   }
   if (data.playerId) disconnectPlayers.delete(data.playerId);
   renderDisconnectBanner();
+  syncScoresFromRoster();
 
   if (!players.find(p => p.id === myPlayerId)) {
     hideDisconnectBanners();
@@ -2128,6 +2590,7 @@ socket.on('playerLeft', (data) => {
 });
 
 socket.on('roomLeft', () => {
+  if (soloMode) return;
   // Only a server ack clears the local room. Explicit leave / return-to-lobby
   // never mutate room state optimistically.
   authoritativeReady = true;
@@ -2141,6 +2604,7 @@ socket.on('roomLeft', () => {
 // a refresh cannot reset first-round scores or lose the cached duration.
 function applyRoundStart(data, options = {}) {
   if (!data) return;
+  if (soloMode && !options.solo) return; // server rounds never interrupt solo
   const restore = !!options.restore;
   const ownSubmission = options.ownSubmission || null;
   // A transport reconnect re-sends the same active round. Do not discard a
@@ -2168,12 +2632,12 @@ function applyRoundStart(data, options = {}) {
   // Reset live scores only on a live first round. Restoring round 1 must keep
   // the authoritative roster score from before the refresh.
   if (!restore && data.round === 1) {
-    roundScores = { me: 0, opp: 0 };
+    roundScores = { me: soloMode ? soloScore : 0, opp: 0 };
   }
 
   $('currentRound').textContent = data.round;
   $('totalRounds').textContent = totalRounds;
-  if ($('gameRoomCode')) $('gameRoomCode').textContent = myRoomCode || '';
+  if ($('gameRoomCode')) $('gameRoomCode').textContent = soloMode ? 'SOLO' : (myRoomCode || '');
   $('tile1').textContent = data.startLetter;
   $('tile2').textContent = data.endLetter;
   $('tile1').classList.remove('bounce-in');
@@ -2257,7 +2721,7 @@ socket.on('roundStart', (data) => {
 });
 
 socket.on('playerSubmitted', (data) => {
-  if (!data) return;
+  if (!data || soloMode) return;
   if (data.playerId === myPlayerId) return;
   const rosterPlayer = players.find(player => player.id === data.playerId);
   if (rosterPlayer) rosterPlayer.submitted = true;
@@ -2276,7 +2740,9 @@ socket.on('playerSubmitted', (data) => {
 
 function applyRoundEnd(data, options = {}) {
   if (!data || !Array.isArray(data.results)) return;
+  if (soloMode && !options.solo) return; // server rounds never interrupt solo
   const restore = !!options.restore;
+  const meId = soloMode ? SOLO_PLAYER_ID : myPlayerId;
   stopPhaseTimers();
   roundDeadline = null;
   currentRound = data.round || currentRound;
@@ -2302,19 +2768,21 @@ function applyRoundEnd(data, options = {}) {
     }
   });
   const hasSingleWinner = roundWinnerIds.length === 1;
-  const meResult = data.results.find(r => r.playerId === myPlayerId);
+  const meResult = data.results.find(r => r.playerId === meId);
   if (meResult) roundScores.me = meResult.totalScore;
   const oppTotal = data.results
-    .filter(r => r.playerId !== myPlayerId)
+    .filter(r => r.playerId !== meId)
     .reduce((sum, r) => sum + (r.totalScore || 0), 0);
   roundScores.opp = oppTotal;
   // Keep the lobby roster authoritative for later snapshot-style reads and
-  // for a refresh that happens between rounds.
-  for (const result of data.results) {
-    const rosterPlayer = players.find(player => player.id === result.playerId);
-    if (rosterPlayer) {
-      rosterPlayer.score = result.totalScore || 0;
-      rosterPlayer.submitted = false;
+  // for a refresh that happens between rounds. Solo has no roster.
+  if (!soloMode) {
+    for (const result of data.results) {
+      const rosterPlayer = players.find(player => player.id === result.playerId);
+      if (rosterPlayer) {
+        rosterPlayer.score = result.totalScore || 0;
+        rosterPlayer.submitted = false;
+      }
     }
   }
   updateScoreHint();
@@ -2322,7 +2790,7 @@ function applyRoundEnd(data, options = {}) {
   // Result cards — every result carries explicit status text, not color-only
   const resultsHTML = data.results.map((r, i) => {
     const isWinner = hasSingleWinner && roundWinnerIds.includes(r.playerId);
-    const isYou = r.playerId === myPlayerId;
+    const isYou = r.playerId === meId;
     const wordDisplay = r.word
       ? escapeHtml(r.word)
       : '<span class="result-empty">(no submission)</span>';
@@ -2358,7 +2826,7 @@ function applyRoundEnd(data, options = {}) {
   const scores = data.results.map(r => ({
     name: r.name,
     score: r.totalScore,
-    isMe: r.playerId === myPlayerId,
+    isMe: r.playerId === meId,
     isWinner: roundWinnerIds.includes(r.playerId),
   }));
   const maxScore = Math.max(...scores.map(s => s.score), 1);
@@ -2395,6 +2863,11 @@ function applyRoundEnd(data, options = {}) {
     advFill.style.animation = 'none';
     void advFill.offsetWidth;
     advFill.style.animation = '';
+    advFill.style.animationDuration = soloMode ? `${SOLO_RESULT_PAUSE_MS}ms` : '';
+  }
+  const advLabel = $('autoAdvanceLabel');
+  if (advLabel) {
+    advLabel.textContent = soloMode && data.round >= totalRounds ? 'FINAL SCORE' : 'NEXT ROUND';
   }
   const advIndicator = $('autoAdvanceIndicator');
   if (advIndicator) {
@@ -2411,7 +2884,7 @@ function applyRoundEnd(data, options = {}) {
     ? (meResult.isValid ? `You scored ${meResult.points} points with "${meResult.word}". Your total is ${meResult.totalScore}.` : `Your word was invalid. Your total stays at ${meResult.totalScore}.`)
     : '';
   const winnerLine = hasSingleWinner && roundWinnerIds.length
-    ? (roundWinnerIds[0] === myPlayerId ? 'You won this round.' : `${escapeHtml((data.results.find(r => r.playerId === roundWinnerIds[0]) || {}).name || 'Someone')} won this round.`)
+    ? (roundWinnerIds[0] === meId ? 'You won this round.' : `${escapeHtml((data.results.find(r => r.playerId === roundWinnerIds[0]) || {}).name || 'Someone')} won this round.`)
     : (roundWinnerIds.length > 1 ? 'This round was a tie.' : '');
   announce(`Round ${data.round} results. ${winnerLine} ${meLine}`);
 }
@@ -2462,13 +2935,16 @@ function renderRematchButton(canPlayAgain, expectedPlayerCount) {
 // from the current roster while preserving the authoritative votes — never
 // re-run gameEnd rendering here.
 function recomputeFinishedRematch() {
+  if (soloMode) return;
   if (!finishedGameEnd) return;
   renderRematchButton(canRematchFromRoster());
 }
 
 function applyGameEnd(data, options = {}) {
   if (!data) return;
+  if (soloMode && !options.solo) return; // server rounds never interrupt solo
   const restore = !!options.restore;
+  const soloRun = soloMode || !!options.solo;
   const voterIds = Array.isArray(options.voterIds) ? options.voterIds : [];
 
   stopPhaseTimers();
@@ -2478,7 +2954,7 @@ function applyGameEnd(data, options = {}) {
   const sortedRankings = [...(data.rankings || [])].sort((a, b) => b.score - a.score);
 
   const rankingsHTML = sortedRankings.map((r, i) => {
-    const isMe = r.id === myPlayerId;
+    const isMe = r.id === myPlayerId || (soloRun && r.id === SOLO_PLAYER_ID);
     let rankClass, place, placeLabel;
     if (i === 0) { rankClass = 'rank-gold'; place = '1st'; placeLabel = '1st place'; }
     else if (i === 1) { rankClass = 'rank-silver'; place = '2nd'; placeLabel = '2nd place'; }
@@ -2501,39 +2977,84 @@ function applyGameEnd(data, options = {}) {
   winDisplay.classList.remove('tie');
   winDisplay.style.color = '';
 
-  if (data.isTie) {
-    winDisplay.textContent = 'Tie game';
-    winDisplay.classList.add('tie');
-    if (!restore) sfxLose();
-  } else {
-    const winner = (data.players || []).find(p => p.id === data.winnerId);
-    const isWinner = data.winnerId === myPlayerId;
-    if (data.forfeit) {
-      winDisplay.textContent = isWinner ? 'Opponent forfeited — you win!' : 'You forfeited';
-    } else {
-      winDisplay.textContent = isWinner ? 'You win!' : `${winner ? winner.name : 'Someone'} wins!`;
+  const soloSummary = $('soloEndSummary');
+  const newBestBadge = $('soloNewBestBadge');
+  const soloBestEnd = $('soloBestEnd');
+
+  if (soloRun) {
+    const score = sortedRankings.length ? sortedRankings[0].score : soloScore;
+    const newBest = !!(options.newBest || data.newBest);
+    const best = Number.isFinite(Number(data.best)) ? Number(data.best) : soloBest;
+    winDisplay.textContent = newBest ? `NEW BEST — ${score} points!` : `SOLO SCORE ${score}`;
+    if (newBest) winDisplay.classList.add('win');
+    if (soloSummary) soloSummary.hidden = false;
+    if (soloBestEnd) soloBestEnd.textContent = String(best);
+    if (newBestBadge) newBestBadge.hidden = !newBest;
+    const playAgain = $('playAgainBtn');
+    if (playAgain) {
+      playAgain.style.display = 'inline-block';
+      playAgain.disabled = false;
+      playAgain.textContent = 'PLAY AGAIN';
     }
-    if (isWinner && !data.forfeit) {
-      winDisplay.classList.add('win');
-      if (!restore) {
+    const returnButton = $('returnToLobbyBtn');
+    if (returnButton) returnButton.textContent = 'MAIN MENU';
+
+    finishedGameEnd = null;
+    finishedVoterIds = [];
+    playAgainVoted = false;
+
+    if (!restore) {
+      if (newBest) {
         sfxWin();
         setTimeout(() => spawnConfetti(60), 400);
+      } else if (score === 0) {
+        sfxLose();
       }
-    } else if (!restore) {
-      sfxLose();
     }
-  }
+  } else {
+    if (soloSummary) soloSummary.hidden = true;
+    if (newBestBadge) newBestBadge.hidden = true;
+    const returnButton = $('returnToLobbyBtn');
+    if (returnButton) returnButton.textContent = 'RETURN TO LOBBY';
 
-  finishedGameEnd = data;
-  finishedVoterIds = [...voterIds];
-  playAgainVoted = !!(myPlayerId && voterIds.includes(myPlayerId));
-  renderRematchButton(data.canPlayAgain !== false);
+    if (data.isTie) {
+      winDisplay.textContent = 'Tie game';
+      winDisplay.classList.add('tie');
+      if (!restore) sfxLose();
+    } else {
+      const winner = (data.players || []).find(p => p.id === data.winnerId);
+      const isWinner = data.winnerId === myPlayerId;
+      if (data.forfeit) {
+        winDisplay.textContent = isWinner ? 'Opponent forfeited — you win!' : 'You forfeited';
+      } else {
+        winDisplay.textContent = isWinner ? 'You win!' : `${winner ? winner.name : 'Someone'} wins!`;
+      }
+      if (isWinner && !data.forfeit) {
+        winDisplay.classList.add('win');
+        if (!restore) {
+          sfxWin();
+          setTimeout(() => spawnConfetti(60), 400);
+        }
+      } else if (!restore) {
+        sfxLose();
+      }
+    }
+
+    finishedGameEnd = data;
+    finishedVoterIds = [...voterIds];
+    playAgainVoted = !!(myPlayerId && voterIds.includes(myPlayerId));
+    renderRematchButton(data.canPlayAgain !== false);
+  }
 
   showScreen('endScreen', restore);
 
   // Final standings announcement
   const standingLines = sortedRankings.map((r, i) => `${i + 1}. ${escapeHtml(r.name)} — ${r.score} points`).join('. ');
-  announce(`Game over. Final standings: ${standingLines}. ${winDisplay.textContent}`);
+  if (soloRun) {
+    announce(`Solo run over. ${winDisplay.textContent}. Best ${soloBest}.`);
+  } else {
+    announce(`Game over. Final standings: ${standingLines}. ${winDisplay.textContent}`);
+  }
 }
 
 socket.on('gameEnd', (data) => {
@@ -2541,7 +3062,7 @@ socket.on('gameEnd', (data) => {
 });
 
 socket.on('playAgainVote', (data) => {
-  if (!data) return;
+  if (!data || soloMode) return;
   const { playerCount, votedId, voterIds } = data;
   if (Array.isArray(voterIds)) {
     finishedVoterIds = [...voterIds];
@@ -2559,7 +3080,7 @@ socket.on('playAgainVote', (data) => {
 });
 
 socket.on('gameReset', (data) => {
-  if (!data) return;
+  if (!data || soloMode) return;
   stopPhaseTimers();
   hideDisconnectBanners();
   if ($('resultCards')) $('resultCards').innerHTML = '';
@@ -2626,7 +3147,7 @@ function startTimer() {
   lastTimerAnnounceSecond = -1;
 
   function updateTimer() {
-    const now = serverNow();
+    const now = soloMode ? Date.now() : serverNow();
     const totalTime = currentRoundDuration;
     const remaining = Math.max(0, roundDeadline - now);
     const secondsLeft = Math.ceil(remaining / 1000);
@@ -2678,6 +3199,7 @@ function startTimer() {
         setWordFeedback("Time's up", 'error');
       }
       announce('Time up.');
+      if (soloMode && soloActive && !soloRoundEnding) endSoloRound();
     }
   }
 
@@ -2691,6 +3213,9 @@ function startTimer() {
   loadComfortPrefs();
   applyComfortPrefs();
   watchSystemComfortPrefs();
+
+  soloBest = loadSoloBest();
+  renderSoloBestBadges();
 
   const profile = loadProfile();
   if (profile) {

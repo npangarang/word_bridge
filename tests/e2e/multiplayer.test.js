@@ -356,7 +356,33 @@ async function readClient(page) {
     })(),
     resultText: document.getElementById('resultCards').textContent,
     wordDisplay: document.getElementById('wordDisplayValue').textContent,
-    keyboardDisabled: [...document.querySelectorAll('#gameKeyboard .word-key')].every(key => key.disabled)
+    keyboardDisabled: [...document.querySelectorAll('#gameKeyboard .word-key')].every(key => key.disabled),
+    scoreboard: {
+      you: document.getElementById('scoreHintYou')?.textContent || '',
+      bestHidden: document.getElementById('scoreHintBestRow')?.hidden,
+      opponents: [...document.querySelectorAll('#scoreHint .score-hint-opponent')].map(row => ({
+        name: row.dataset.name,
+        score: Number(row.dataset.score),
+        label: row.getAttribute('aria-label')
+      }))
+    },
+    keyboardRows: [...document.querySelectorAll('#gameKeyboard .keyboard-row')].map(row => (
+      [...row.querySelectorAll('.word-key')].map(key => key.dataset.key || key.dataset.action)
+    )),
+    stack: (() => {
+      const rect = element => {
+        const r = element.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom };
+      };
+      const game = document.getElementById('gameScreen');
+      const style = getComputedStyle(game);
+      return {
+        reactions: rect(document.getElementById('gameReactions')),
+        submit: rect(document.getElementById('submitWordBtn')),
+        keyboard: rect(document.querySelector('.game-keyboard')),
+        contentBottom: game.getBoundingClientRect().bottom - parseFloat(style.paddingBottom)
+      };
+    })()
   }));
 }
 
@@ -1052,6 +1078,20 @@ async function run() {
         assert.equal(bobGame.players.length, 2);
         assert.equal(aliceGame.code, bobGame.code);
         assert.equal(await alice.evaluate(() => isWordInputOpen()), true);
+        assert.deepEqual(aliceGame.keyboardRows, [
+          ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+          ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+          ['-', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'backspace']
+        ]);
+        assert.equal(aliceGame.stack.reactions.bottom <= aliceGame.stack.submit.top + 0.5, true,
+          'reactions must sit above submit in the live game');
+        assert.equal(aliceGame.stack.submit.bottom <= aliceGame.stack.keyboard.top + 0.5, true,
+          'submit must sit above the live keyboard');
+        assert.ok(Math.abs(aliceGame.stack.keyboard.bottom - aliceGame.stack.contentBottom) <= 0.75,
+          'live keyboard must be flush with the bottom safe area');
+        assert.deepEqual(aliceGame.scoreboard.opponents.map(row => `${row.name} ${row.score}`), ['ChallengeBob 0']);
+        assert.deepEqual(bobGame.scoreboard.opponents.map(row => `${row.name} ${row.score}`), ['ChallengeAlice 0']);
+        assert.equal(aliceGame.scoreboard.bestHidden, true, 'multiplayer score slot must not show solo BEST');
 
         const round1 = await readClient(alice);
         const word1 = findWord(round1.start, round1.end);
@@ -1069,6 +1109,8 @@ async function run() {
         assert.equal(restored.end, beforeReconnect.end);
         assert.equal(restored.deadline, beforeReconnect.deadline);
         assert.equal(restored.players.length, 2);
+        assert.deepEqual(restored.scoreboard.opponents.map(row => row.name), ['ChallengeAlice'],
+          'scoreboard names must survive reconnect/restore');
         assert.equal(await bob.evaluate(() => isWordInputOpen()), true,
           'challenge input must be usable after reconnect');
         const word2 = findWord(restored.start, restored.end);
