@@ -683,6 +683,16 @@ function escapeAttr(str) {
     .replace(/>/g, '&gt;');
 }
 
+// Score units in visible text, aria labels and announcements all come from one
+// place so 1 never renders as "1 points" (or "1 pts"). Compact UI slots use
+// the short pt/pts form to preserve their existing widths.
+function formatPoints(count, short = false) {
+  const value = Number(count);
+  const score = Number.isFinite(value) ? Math.trunc(value) : 0;
+  if (short) return `${score} ${score === 1 ? 'pt' : 'pts'}`;
+  return `${score} ${score === 1 ? 'point' : 'points'}`;
+}
+
 function spawnConfetti(count) {
   if (comfortPrefs.motionOff) return;
   const colors = ['var(--neon-green)', 'var(--neon-cyan)', 'var(--neon-magenta)', 'var(--neon-yellow)', 'var(--neon-orange)'];
@@ -2087,7 +2097,7 @@ function updateScoreHint() {
   if (me) me.textContent = myScore;
 
   const meRow = $('scoreHintMeRow');
-  if (meRow) meRow.setAttribute('aria-label', `You: ${myScore} ${myScore === 1 ? 'point' : 'points'}`);
+  if (meRow) meRow.setAttribute('aria-label', `You: ${formatPoints(myScore)}`);
 
   const bestRow = $('scoreHintBestRow');
   const bestEl = $('scoreHintBest');
@@ -2096,7 +2106,7 @@ function updateScoreHint() {
   if (soloMode) {
     if (bestRow) {
       bestRow.hidden = false;
-      bestRow.setAttribute('aria-label', `Best score: ${soloBest} ${soloBest === 1 ? 'point' : 'points'}`);
+      bestRow.setAttribute('aria-label', `Best score: ${formatPoints(soloBest)}`);
     }
     if (bestEl) bestEl.textContent = soloBest;
     if (emptyEl) emptyEl.hidden = true;
@@ -2149,7 +2159,7 @@ function updateScoreHint() {
     if (scoreEl && scoreEl.textContent !== String(player.score)) scoreEl.textContent = player.score;
     el.dataset.name = player.name;
     el.dataset.score = String(player.score);
-    const label = `${player.name}: ${player.score} ${player.score === 1 ? 'point' : 'points'}`;
+    const label = `${player.name}: ${formatPoints(player.score)}`;
     if (el.getAttribute('aria-label') !== label) el.setAttribute('aria-label', label);
     if (el.title !== label) el.title = label;
     nodes.set(player.id, el);
@@ -2801,7 +2811,7 @@ function applyRoundEnd(data, options = {}) {
             ${isWinner ? '<span class="winner-tag">Winner</span>' : ''}
             ${isYou ? 'You' : escapeHtml(r.name)}
           </span>
-          <span class="result-points">+${r.points} pts</span>
+          <span class="result-points">+${formatPoints(r.points, true)}</span>
         </div>
         <div class="result-word">${wordDisplay}</div>
         <div class="result-meta">
@@ -2881,7 +2891,9 @@ function applyRoundEnd(data, options = {}) {
 
   // Build an accessible summary of the round
   const meLine = meResult
-    ? (meResult.isValid ? `You scored ${meResult.points} points with "${meResult.word}". Your total is ${meResult.totalScore}.` : `Your word was invalid. Your total stays at ${meResult.totalScore}.`)
+    ? (meResult.isValid
+      ? `You scored ${formatPoints(meResult.points)} with "${meResult.word}". Your total is ${formatPoints(meResult.totalScore)}.`
+      : `Your word was invalid. Your total stays at ${formatPoints(meResult.totalScore)}.`)
     : '';
   const winnerLine = hasSingleWinner && roundWinnerIds.length
     ? (roundWinnerIds[0] === meId ? 'You won this round.' : `${escapeHtml((data.results.find(r => r.playerId === roundWinnerIds[0]) || {}).name || 'Someone')} won this round.`)
@@ -2964,7 +2976,7 @@ function applyGameEnd(data, options = {}) {
       <div class="ranking-row ${rankClass}${isMe ? ' me' : ''}" role="listitem">
         <span class="rank-place" aria-label="${placeLabel}">${place}</span>
         <span class="rank-name">${escapeHtml(r.name)}${isMe ? ' (you)' : ''}</span>
-        <span class="rank-score" aria-label="${r.score} points">${r.score} pts</span>
+        <span class="rank-score" aria-label="${formatPoints(r.score)}">${formatPoints(r.score, true)}</span>
       </div>
     `;
   }).join('');
@@ -2985,7 +2997,7 @@ function applyGameEnd(data, options = {}) {
     const score = sortedRankings.length ? sortedRankings[0].score : soloScore;
     const newBest = !!(options.newBest || data.newBest);
     const best = Number.isFinite(Number(data.best)) ? Number(data.best) : soloBest;
-    winDisplay.textContent = newBest ? `NEW BEST — ${score} points!` : `SOLO SCORE ${score}`;
+    winDisplay.textContent = newBest ? `NEW BEST — ${formatPoints(score)}!` : `SOLO SCORE ${formatPoints(score)}`;
     if (newBest) winDisplay.classList.add('win');
     if (soloSummary) soloSummary.hidden = false;
     if (soloBestEnd) soloBestEnd.textContent = String(best);
@@ -3049,9 +3061,11 @@ function applyGameEnd(data, options = {}) {
   showScreen('endScreen', restore);
 
   // Final standings announcement
-  const standingLines = sortedRankings.map((r, i) => `${i + 1}. ${escapeHtml(r.name)} — ${r.score} points`).join('. ');
+  const standingLines = sortedRankings.map((r, i) => `${i + 1}. ${escapeHtml(r.name)} — ${formatPoints(r.score)}`).join('. ');
   if (soloRun) {
-    announce(`Solo run over. ${winDisplay.textContent}. Best ${soloBest}.`);
+    const headline = winDisplay.textContent;
+    const terminator = /[.!?]$/.test(headline) ? '' : '.';
+    announce(`Solo run over. ${headline}${terminator} Best ${formatPoints(soloBest)}.`);
   } else {
     announce(`Game over. Final standings: ${standingLines}. ${winDisplay.textContent}`);
   }

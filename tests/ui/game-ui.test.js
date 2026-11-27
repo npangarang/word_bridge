@@ -694,6 +694,11 @@ async function run() {
         assert.equal(board.bestHidden, true);
         assert.deepEqual(board.opponents.map(row => `${row.name} ${row.score}`), ['Bob 4', 'Cara 4', 'Alice 1'],
           'descending score with roster order breaking ties');
+        assert.equal(board.opponents.find(row => row.name === 'Alice').label, 'Alice: 1 point');
+        assert.equal(
+          await page.evaluate(() => document.getElementById('scoreHintMeRow').getAttribute('aria-label')),
+          'You: 0 points'
+        );
         assert.equal(board.emptyHidden, true);
 
         const updated = playingSnapshot({
@@ -1963,7 +1968,8 @@ async function run() {
           text: document.getElementById('resultCards').textContent
         }));
         assert.equal(result.score, 1, 'a valid word after 3s scores one point, not two');
-        assert.match(result.text, /\+1 pts/);
+        assert.match(result.text, /\+1 pt/);
+        assert.doesNotMatch(result.text, /\+1 pts/);
         assert.doesNotMatch(result.text, /speed bonus/);
 
         // Skip the results pause; then let the second round expire untouched.
@@ -2067,6 +2073,148 @@ async function run() {
         }));
         assert.equal(menu.badge, 'BEST 7');
         assert.equal(menu.playAgainDisplay, 'none');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('solo end screen and announcement use singular and plural point forms', async () => {
+      const page = await openNamePage(browser, server.origin);
+      try {
+        const readEnd = () => page.evaluate(() => ({
+          winner: document.getElementById('winnerDisplay').textContent,
+          announce: document.getElementById('srAnnounce').textContent,
+          rankText: document.querySelector('#finalRankings .rank-score')?.textContent,
+          rankLabel: document.querySelector('#finalRankings .rank-score')?.getAttribute('aria-label')
+        }));
+
+        await startSolo(page);
+        await page.evaluate(() => {
+          soloPreviousBest = 0;
+          soloScore = 1;
+          soloRound = 10;
+          finishSoloRun();
+        });
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
+        let end = await readEnd();
+        assert.equal(end.winner, 'NEW BEST — 1 point!');
+        assert.equal(end.rankText, '1 pt');
+        assert.equal(end.rankLabel, '1 point');
+        assert.match(end.announce, /NEW BEST — 1 point!/);
+        assert.match(end.announce, /Best 1 point\./);
+        assert.doesNotMatch(end.announce, /1 points/);
+
+        await page.click('#playAgainBtn');
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'gameScreen' &&
+          currentRound === 1
+        ), [], 5000);
+        await page.evaluate(() => {
+          soloPreviousBest = 1;
+          soloScore = 2;
+          soloRound = 10;
+          finishSoloRun();
+        });
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
+        end = await readEnd();
+        assert.equal(end.winner, 'NEW BEST — 2 points!');
+        assert.equal(end.rankText, '2 pts');
+        assert.equal(end.rankLabel, '2 points');
+        assert.match(end.announce, /NEW BEST — 2 points!/);
+        assert.match(end.announce, /Best 2 points\./);
+        assert.doesNotMatch(end.announce, /2 point\./);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('standings and round-result announcements use singular and plural point forms', async () => {
+      const page = await openGame(browser, server.origin, {
+        playerNames: ['Tester', 'Opponent']
+      });
+      try {
+        const endWithScore = score => page.evaluate(points => {
+          applyGameEnd({
+            players: [
+              { id: 'p1', name: 'Tester' },
+              { id: 'p2', name: 'Opponent' }
+            ],
+            rankings: [
+              { id: 'p1', name: 'Tester', score: points },
+              { id: 'p2', name: 'Opponent', score: 0 }
+            ],
+            winnerId: 'p1',
+            isTie: false,
+            canPlayAgain: true,
+            forfeit: false
+          });
+        }, score);
+        const endState = () => page.evaluate(() => ({
+          announce: document.getElementById('srAnnounce').textContent,
+          rankText: document.querySelector('#finalRankings .rank-score')?.textContent,
+          rankLabel: document.querySelector('#finalRankings .rank-score')?.getAttribute('aria-label')
+        }));
+
+        await endWithScore(1);
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
+        let state = await endState();
+        assert.match(state.announce, /1\. Tester — 1 point\./);
+        assert.doesNotMatch(state.announce, /1 points/);
+        assert.equal(state.rankText, '1 pt');
+        assert.equal(state.rankLabel, '1 point');
+
+        await endWithScore(2);
+        await page.waitForTimeout(50);
+        state = await endState();
+        assert.match(state.announce, /1\. Tester — 2 points\./);
+        assert.equal(state.rankText, '2 pts');
+        assert.equal(state.rankLabel, '2 points');
+
+        const roundWithScore = points => page.evaluate(value => {
+          applyRoundEnd({
+            results: [
+              {
+                playerId: 'p1',
+                name: 'Tester',
+                word: 'art',
+                isValid: true,
+                timeTaken: 1.2,
+                points: value,
+                bonus: 0,
+                totalScore: value
+              },
+              {
+                playerId: 'p2',
+                name: 'Opponent',
+                word: 'ant',
+                isValid: true,
+                timeTaken: 2,
+                points: 0,
+                bonus: 0,
+                totalScore: 0
+              }
+            ],
+            pair: ['A', 'T'],
+            round: 1,
+            totalRounds: 10,
+            examples: ['art']
+          });
+        }, points);
+
+        await roundWithScore(1);
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'resultScreen');
+        let announce = await page.evaluate(() => document.getElementById('srAnnounce').textContent);
+        assert.match(announce, /You scored 1 point with "art"\. Your total is 1 point\./);
+        assert.doesNotMatch(announce, /1 points/);
+        assert.match(await page.evaluate(() => document.getElementById('resultCards').textContent), /\+1 pt/);
+
+        await roundWithScore(2);
+        await page.waitForTimeout(50);
+        announce = await page.evaluate(() => document.getElementById('srAnnounce').textContent);
+        assert.match(announce, /You scored 2 points with "art"\. Your total is 2 points\./);
+        assert.match(await page.evaluate(() => document.getElementById('resultCards').textContent), /\+2 pts/);
         assert.deepEqual(page.pageErrors, []);
       } finally {
         await page.close();
