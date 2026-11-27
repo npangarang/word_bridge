@@ -4,7 +4,11 @@
   "description": "2-8 player real-time word game — bridge from start letter to end letter",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:server": "node --test tests/server*.test.js",
+    "test:ui": "node tests/ui/game-ui.test.js",
+    "test:e2e": "node tests/e2e/multiplayer.test.js",
+    "test": "npm run test:server && npm run test:ui && npm run test:e2e"
   },
   "repository": {
     "type": "git",

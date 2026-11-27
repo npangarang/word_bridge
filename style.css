@@ -92,11 +92,69 @@ body::after {
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  padding: 24px 24px 48px;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(48px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
   width: 100%;
   max-width: 560px;
   min-height: 100vh;
 }
+
+/* =========================================================================
+   ACTIVE GAME VIEWPORT
+   Scoped to the guessing screen only. Lobby/help/results keep document scroll.
+   The game surface is a fixed dynamic-viewport grid so the keyboard row never
+   moves when the timer, score or submission status changes.
+   ========================================================================= */
+html:has(#gameScreen.active),
+body:has(#gameScreen.active) {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#gameScreen.active {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "header"
+    "play"
+    "input"
+    "react";
+  gap: 8px;
+  align-content: stretch;
+  justify-content: stretch;
+  width: 100%;
+  max-width: 560px;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  margin: 0 auto;
+  padding:
+    max(8px, env(safe-area-inset-top))
+    max(10px, env(safe-area-inset-right))
+    max(8px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+  overflow: hidden;
+  overscroll-behavior: none;
+  animation: gameScreenIn 0.22s ease-out;
+}
+#gameScreen.active.exiting { animation: screenOut 0.25s ease-in forwards; }
+@keyframes gameScreenIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+#gameScreen .game-header { grid-area: header; }
+#gameScreen .game-play { grid-area: play; }
+#gameScreen .game-input-zone { grid-area: input; }
+#gameScreen #gameReactions { grid-area: react; }
 
 /* =========================================================================
    ACCESSIBILITY UTILITIES
@@ -198,7 +256,6 @@ h2 { font-family: var(--font-body); font-size: calc(15px * var(--text-scale)); f
 }
 
 .arcade-input,
-.word-input,
 .profile-modal-content input[type="text"],
 .profile-modal-content input:not([type="checkbox"]) {
   width: 100%;
@@ -224,14 +281,12 @@ h2 { font-family: var(--font-body); font-size: calc(15px * var(--text-scale)); f
 }
 
 .arcade-input::placeholder,
-.word-input::placeholder,
 .profile-modal-content input::placeholder {
   color: var(--text-dim);
   font-weight: 400;
 }
 
 .arcade-input:focus-visible,
-.word-input:focus-visible,
 .profile-modal-content input:focus-visible {
   border-color: var(--neon-cyan);
   box-shadow: 0 0 0 3px rgba(77, 220, 255, 0.35);
@@ -947,8 +1002,15 @@ h2 { font-family: var(--font-body); font-size: calc(15px * var(--text-scale)); f
   border: 2px solid rgba(77, 220, 255, 0.18);
   pointer-events: none;
 }
-.tile.bounce-in { animation: tileBounce 0.6s ease-out forwards; }
-.tile.bounce-in:nth-child(2) { animation-delay: 0.15s; opacity: 0; }
+/* `both` covers the delayed second tile with the 0% keyframe. Do NOT put a
+   base `opacity: 0` on nth-child(2): when the critical shake replaces this
+   animation, that base rule would make the second letter disappear. */
+.tile.bounce-in { animation: tileBounce 0.6s ease-out both; }
+.tile.bounce-in:nth-child(2) { animation-delay: 0.15s; }
+/* If we enter a round already in the critical window (e.g. reconnect),
+   skip the entrance bounce entirely. The parent shake still runs and both
+   letters are visible from the first frame. */
+#gameScreen.screen-critical .tile.bounce-in:not(.glow-burst) { animation: none; opacity: 1; }
 @keyframes tileBounce {
   0%   { transform: scale(0.3) rotate(-15deg); opacity: 0; }
   50%  { transform: scale(1.2) rotate(3deg);  opacity: 1; }
@@ -1077,9 +1139,10 @@ h2 { font-family: var(--font-body); font-size: calc(15px * var(--text-scale)); f
   color: var(--text-medium);
 }
 
-/* Critical state — text + color + shake. Text label also changes via aria-live */
+/* Critical state — text + color + shake. Shake the tiles container, not the
+   individual tiles, so the entrance bounce (and its opacity) is never replaced. */
 .timer-bar.critical .timer-progress { background: var(--neon-red); box-shadow: 0 0 16px var(--neon-red); }
-.screen-critical .tile { animation: tileShake 0.4s ease-in-out infinite !important; }
+.screen-critical .tiles { animation: tileShake 0.4s ease-in-out infinite; }
 @keyframes tileShake {
   0%, 100% { transform: translateX(0); }
   25%      { transform: translateX(-4px); }
@@ -1202,47 +1265,130 @@ body.timer-critical::before {
 }
 
 /* =========================================================================
-   WORD INPUT + SUBMIT HINT
+   GAME HUD / PLAY AREA
    ========================================================================= */
-.word-input {
-  text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 4px;
-  font-family: var(--font-mono);
-  font-size: calc(20px * var(--text-scale));
-  font-weight: 700;
-  color: var(--neon-green);
-  border-color: var(--neon-cyan);
+#gameScreen .game-header {
+  width: 100%;
+  max-width: none;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: nowrap;
+}
+#gameScreen .game-header-info {
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+#gameScreen .round-info,
+#gameScreen .room-code-chip { flex: 0 0 auto; }
+#gameScreen .submissions-status { min-width: 0; }
+
+/* Submission chips stay on one scrollable row. This keeps the header height
+   fixed for 2-8 players, so the keyboard below never moves. */
+#gameScreen .submissions-status {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 0;
+  max-height: 32px;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  align-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+#gameScreen .submissions-status::-webkit-scrollbar { display: none; }
+#gameScreen .submission-item { flex: 0 0 auto; }
+
+#gameScreen .game-play {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 0;
+}
+
+/* =========================================================================
+   WORD ENTRY — visible display, on-screen keyboard, prominent submit
+   ========================================================================= */
+#gameScreen .game-input-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+}
+
+.word-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 14px;
+  flex: 0 0 auto;
   background: var(--bg-panel);
+  border: 2px solid var(--neon-cyan);
+  border-radius: var(--radius-card);
+  font-family: var(--font-mono);
+  font-size: clamp(16px, 4.8vw, 22px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.1em;
+  color: var(--neon-green);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
 }
-.word-input::placeholder {
+.word-display-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.word-display.empty {
   color: var(--text-dim);
-  letter-spacing: 2px;
+  font-family: var(--font-body);
   font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  letter-spacing: 2px;
   text-transform: uppercase;
-  font-weight: 500;
 }
-.word-input:focus-visible {
+.word-display:focus-visible {
   border-color: var(--neon-green);
   box-shadow: 0 0 0 3px rgba(92, 255, 58, 0.35);
 }
-.word-input:disabled { opacity: 0.55; }
-
-.word-input.submitted-flash {
-  border-color: var(--neon-green);
-  box-shadow: 0 0 0 3px rgba(92, 255, 58, 0.35);
-  animation: submittedFlash 0.6s ease-out forwards;
-}
-@keyframes submittedFlash {
-  0%   { transform: scale(1.03); }
-  50%  { transform: scale(1); }
-  100% { transform: scale(1); }
-}
-
-.word-input.invalid-input {
+.word-display.submitted { border-color: var(--neon-green); }
+.word-display.invalid {
   border-color: var(--neon-red);
   box-shadow: 0 0 0 3px rgba(255, 90, 90, 0.35);
   animation: inputShake 0.4s ease-out;
+}
+.word-display.empty .word-caret,
+.word-display.submitted .word-caret { display: none; }
+
+.word-caret {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 2px;
+  height: 1.25em;
+  margin-left: 3px;
+  background: var(--neon-green);
+  box-shadow: 0 0 8px var(--neon-green);
+  animation: caretBlink 1s step-end infinite;
+}
+@keyframes caretBlink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 @keyframes inputShake {
   0%, 100% { transform: translateX(0); }
@@ -1250,26 +1396,109 @@ body.timer-critical::before {
   40%, 80% { transform: translateX(6px); }
 }
 
-.submit-hint {
-  font-family: var(--font-body);
-  font-size: calc(13px * var(--text-scale));
-  font-weight: 600;
+/* Fixed-height feedback line: validation text never pushes the keyboard. */
+.word-feedback {
+  height: 17px;
+  min-height: 17px;
+  margin: 0;
+  overflow: hidden;
   color: var(--text-medium);
-  letter-spacing: 1px;
-  margin-top: 4px;
-  text-align: center;
-}
-.submit-hint kbd {
-  display: inline-block;
-  padding: 2px 8px;
-  margin: 0 2px;
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: calc(12px * var(--text-scale));
-  font-weight: 700;
-  color: var(--text-strong);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.4px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.word-feedback.error { color: var(--neon-red); }
+.word-feedback.success { color: var(--neon-green); }
+
+#gameScreen .game-keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#gameScreen .keyboard-row {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+#gameScreen .keyboard-row-2 { padding: 0 4.5%; }
+#gameScreen .word-key {
+  display: inline-flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 46px;
+  padding: 0;
   background: var(--bg-panel);
-  border: 1px solid var(--text-medium);
-  border-radius: 3px;
+  border: 2px solid var(--text-medium);
+  border-radius: var(--radius-card);
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: clamp(13px, 2.9vw, 17px);
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.06s ease;
+}
+#gameScreen .word-key:hover {
+  border-color: var(--neon-cyan);
+  background: var(--bg-panel-2);
+}
+#gameScreen .word-key:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+}
+#gameScreen .word-key:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+#gameScreen .word-key-wide {
+  flex-grow: 1.8;
+  font-size: calc(11px * var(--text-scale));
+  letter-spacing: 0.3px;
+}
+#gameScreen .word-key-hyphen {
+  font-family: var(--font-body);
+  font-size: calc(15px * var(--text-scale));
+}
+
+#gameScreen .game-submit-btn {
+  width: 100%;
+  min-height: 50px;
+  flex: 0 0 auto;
+  letter-spacing: 2px;
+}
+
+/* Compact reactions: flex-shrink keeps all eight controls inside the game
+   surface down to narrow 280px screens. */
+#gameScreen #gameReactions {
+  align-items: center;
+  justify-content: center;
+  gap: clamp(3px, 1vw, 6px);
+  min-height: 0;
+  margin: 0;
+  flex-wrap: nowrap;
+}
+#gameScreen #gameReactions .reaction-btn {
+  flex: 0 1 36px;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  aspect-ratio: 1;
+  font-size: 18px;
 }
 
 /* =========================================================================
@@ -1725,7 +1954,7 @@ body.timer-critical::before {
    ========================================================================= */
 .toast-notification {
   position: fixed;
-  bottom: 24px;
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px));
   left: 50%;
   transform: translateX(-50%);
   padding: 12px 22px;
@@ -1751,7 +1980,11 @@ body.timer-critical::before {
   top: 0;
   left: 0;
   right: 0;
-  padding: 14px 24px;
+  padding:
+    max(14px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    14px
+    max(24px, env(safe-area-inset-left));
   background: var(--neon-red);
   color: var(--text-on-light);
   font-family: var(--font-body);
@@ -1762,6 +1995,76 @@ body.timer-critical::before {
   z-index: 10000;
   box-shadow: 0 4px 20px rgba(255, 90, 90, 0.35);
   animation: bannerSlideIn 0.3s ease-out;
+}
+
+/* The full result/end banner stays a global fixed alert, but it must not sit
+   over the active guessing viewport if a screen transition leaves it mounted.
+   It is mounted throughout so a result/end transition reveals it without
+   needing another socket event. */
+#disconnectBanner { display: none; }
+html:has(#resultScreen.active) #disconnectBanner,
+html:has(#endScreen.active) #disconnectBanner { display: block; }
+html:has(#gameScreen.active) #disconnectBanner { display: none; }
+
+/* Active-game disconnect notice: occupies the existing HUD status row, keeps
+   its height, and never floats over letters or the keyboard. The full name
+   list remains available to assistive tech. */
+#gameScreen.has-disconnect-notice .submissions-status { display: none; }
+#gameDisconnectNotice {
+  position: static;
+  top: auto;
+  right: auto;
+  left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  margin: 0;
+  padding: 2px 8px;
+  background: rgba(255, 90, 90, 0.14);
+  border: 2px solid var(--neon-red);
+  border-radius: var(--radius-card);
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-size: clamp(10px, 2.4vw, 12px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.2px;
+  text-align: left;
+  box-shadow: none;
+  z-index: auto;
+  animation: none;
+  overflow: hidden;
+}
+#gameDisconnectNotice .disconnect-banner-icon {
+  width: 18px;
+  height: 18px;
+  margin-right: 0;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+#gameDisconnectNotice .game-disconnect-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (orientation: landscape) and (max-width: 640px) and (max-height: 520px) {
+  #gameDisconnectNotice .disconnect-summary-wait { display: none; }
+}
+@media (max-width: 480px) {
+  #gameDisconnectNotice { font-size: 10px; }
+}
+@media (orientation: portrait) and (max-height: 520px) {
+  #gameDisconnectNotice { height: 30px; min-height: 30px; max-height: 30px; }
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  #gameDisconnectNotice { height: 30px; min-height: 30px; max-height: 30px; }
 }
 .disconnect-banner-icon {
   display: inline-flex;
@@ -1792,7 +2095,11 @@ body.timer-critical::before {
   justify-content: center;
   align-items: center;
   z-index: 1000;
-  padding: 20px;
+  padding:
+    max(20px, env(safe-area-inset-top))
+    max(20px, env(safe-area-inset-right))
+    max(20px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left));
 }
 .modal-overlay.active {
   display: flex;
@@ -1811,7 +2118,7 @@ body.timer-critical::before {
   text-align: center;
   max-width: 460px;
   width: 100%;
-  max-height: calc(100vh - 40px);
+  max-height: 100%;
   overflow-y: auto;
   box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 16px 40px rgba(0,0,0,0.5);
 }
@@ -1865,7 +2172,7 @@ body.timer-critical::before {
   position: relative;
   max-width: 520px;
   width: 100%;
-  max-height: calc(100vh - 40px);
+  max-height: 100%;
   overflow-y: auto;
   text-align: left;
   border-color: var(--neon-cyan);
@@ -2482,7 +2789,14 @@ body.timer-critical::before {
    RESPONSIVE — 480px
    ========================================================================= */
 @media (max-width: 480px) {
-  .container { padding: 14px; gap: 16px; }
+  .container {
+    padding:
+      max(14px, env(safe-area-inset-top))
+      max(14px, env(safe-area-inset-right))
+      max(14px, env(safe-area-inset-bottom))
+      max(14px, env(safe-area-inset-left));
+    gap: 16px;
+  }
   .screen { gap: 14px; }
 
   .arcade-title { font-size: 24px; }
@@ -2499,13 +2813,10 @@ body.timer-critical::before {
   .timer-display { font-size: 36px; }
   .timer-bar { height: 12px; }
 
-  .word-input { font-size: calc(18px * var(--text-scale)); padding: 14px 14px; letter-spacing: 2px; }
-
   .input-group { max-width: 320px; }
   .room-actions { gap: 12px; }
 
   .arcade-input,
-  .word-input,
   .profile-modal-content input:not([type="checkbox"]) { padding: 13px 14px; font-size: calc(15px * var(--text-scale)); }
 
   .room-code-display { max-width: 320px; padding: 20px 12px 14px; }
@@ -2552,11 +2863,200 @@ body.timer-critical::before {
   }
   .tiles { gap: 10px; }
   .code-char { min-width: 24px; padding: 7px 3px; font-size: 16px; }
-  .word-input { font-size: calc(16px * var(--text-scale)); letter-spacing: 1px; }
   .timer-display { font-size: 30px; }
   .bar-player { width: 64px; }
   .winner-text { font-size: calc(16px * var(--text-scale)); }
   .winner-text.win { font-size: calc(18px * var(--text-scale)); }
+}
+
+/* =========================================================================
+   GAME RESPONSIVE — compact portrait, short portrait, short landscape
+   ========================================================================= */
+
+/* Narrow portrait phones (320-390px) generally fit the full-size HUD. */
+@media (max-width: 480px) {
+  #gameScreen .game-header { gap: 6px; }
+  #gameScreen .submissions-status {
+    flex: 0 0 32px;
+    width: 100%;
+    height: 32px;
+    max-height: 32px;
+  }
+  #gameScreen .game-play { gap: 8px; }
+  #gameScreen .tiles { gap: 12px; }
+  #gameScreen .score-hint { padding: 7px 12px; }
+}
+
+/* Compact portrait: iPhone SE / 360-class phones. Still all controls visible. */
+@media (orientation: portrait) and (max-height: 700px) {
+  #gameScreen.active {
+    gap: 7px;
+    padding-top: max(6px, env(safe-area-inset-top));
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+  }
+  #gameScreen .game-header { gap: 5px; }
+  #gameScreen .round-info { padding: 6px 8px; font-size: calc(13px * var(--text-scale)); }
+  #gameScreen .round-info strong { font-size: calc(15px * var(--text-scale)); }
+  #gameScreen .room-code-chip { padding: 4px 8px; font-size: calc(11px * var(--text-scale)); }
+  #gameScreen .submissions-status { flex-basis: 32px; height: 32px; max-height: 32px; }
+  #gameScreen .submission-item { padding: 4px 8px; font-size: calc(11px * var(--text-scale)); }
+
+  #gameScreen .game-play { gap: 7px; }
+  #gameScreen .tiles { gap: 12px; }
+  #gameScreen .tile {
+    width: calc(70px * var(--tile-scale));
+    height: calc(70px * var(--tile-scale));
+    font-size: calc(32px * var(--tile-scale));
+  }
+  #gameScreen .score-hint { padding: 5px 10px; font-size: calc(13px * var(--text-scale)); }
+  #gameScreen .score-hint-row strong { font-size: calc(16px * var(--text-scale)); }
+  #gameScreen .score-hint-divider { height: 18px; }
+  #gameScreen .timer { gap: 0; }
+  #gameScreen .timer-bar { height: 9px; }
+  #gameScreen .timer-display { font-size: 28px; }
+  #gameScreen .timer-text-label { font-size: calc(9px * var(--text-scale)); }
+
+  #gameScreen .game-input-zone { gap: 5px; }
+  #gameScreen .word-display {
+    min-height: 44px;
+    padding: 6px 10px;
+    font-size: clamp(15px, 4.6vw, 19px);
+  }
+  #gameScreen .word-display.empty { font-size: calc(12px * var(--text-scale)); }
+  #gameScreen .word-feedback { height: 15px; min-height: 15px; font-size: calc(11px * var(--text-scale)); }
+  #gameScreen .game-keyboard { gap: 4px; }
+  #gameScreen .keyboard-row { gap: 4px; }
+  #gameScreen .keyboard-row-2 { padding: 0 4%; }
+  #gameScreen .word-key { height: 38px; }
+  #gameScreen .word-key-wide { font-size: calc(10px * var(--text-scale)); }
+  #gameScreen .game-submit-btn { min-height: 42px; }
+  #gameScreen #gameReactions .reaction-btn { flex-basis: 34px; font-size: 16px; }
+}
+
+/* Very short portrait (320x480 class): keep every control visible, including
+   the feedback line. Timer caption is the only thing removed. */
+@media (orientation: portrait) and (max-height: 520px) {
+  #gameScreen.active {
+    gap: 4px;
+    padding:
+      max(4px, env(safe-area-inset-top))
+      max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom))
+      max(8px, env(safe-area-inset-left));
+  }
+  #gameScreen .game-header { gap: 4px; }
+  #gameScreen .round-info { padding: 4px 6px; font-size: calc(12px * var(--text-scale)); }
+  #gameScreen .round-info strong { font-size: calc(13px * var(--text-scale)); }
+  #gameScreen .room-code-chip { padding: 3px 6px; font-size: calc(10px * var(--text-scale)); }
+  #gameScreen .submissions-status { flex-basis: 30px; height: 30px; max-height: 30px; }
+
+  #gameScreen .game-play { gap: 5px; }
+  #gameScreen .tile {
+    width: calc(56px * var(--tile-scale));
+    height: calc(56px * var(--tile-scale));
+    font-size: calc(26px * var(--tile-scale));
+  }
+  #gameScreen .tiles { gap: 10px; }
+  #gameScreen .score-hint { padding: 3px 8px; font-size: calc(12px * var(--text-scale)); }
+  #gameScreen .score-hint-row strong { font-size: calc(14px * var(--text-scale)); }
+  #gameScreen .score-hint-divider { height: 15px; }
+  #gameScreen .timer-bar { height: 7px; }
+  #gameScreen .timer-display { font-size: 23px; }
+  #gameScreen .timer-text-label { display: none; }
+
+  #gameScreen .game-input-zone { gap: 4px; }
+  #gameScreen .word-display { min-height: 36px; padding: 4px 8px; font-size: 15px; }
+  #gameScreen .word-display.empty { font-size: calc(11px * var(--text-scale)); }
+  #gameScreen .word-feedback { height: 14px; min-height: 14px; font-size: calc(10px * var(--text-scale)); }
+  #gameScreen .game-keyboard { gap: 3px; }
+  #gameScreen .keyboard-row { gap: 3px; }
+  #gameScreen .keyboard-row-2 { padding: 0 3%; }
+  #gameScreen .word-key { height: 33px; font-size: calc(11px * var(--text-scale)); }
+  #gameScreen .word-key-wide { font-size: calc(9px * var(--text-scale)); }
+  #gameScreen .word-key-hyphen { font-size: calc(12px * var(--text-scale)); }
+  #gameScreen .game-submit-btn { min-height: 34px; padding: 8px 12px; font-size: calc(13px * var(--text-scale)); }
+  #gameScreen #gameReactions .reaction-btn { flex-basis: 26px; font-size: 14px; }
+  #gameScreen #gameReactions { gap: 4px; }
+}
+
+/* Short landscape: play left, answer + keyboard + submit right. */
+@media (orientation: landscape) and (max-height: 520px) {
+  #gameScreen.active {
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "header header"
+      "play input"
+      "react input";
+    gap: 6px 18px;
+    max-width: 680px;
+    padding:
+      max(4px, env(safe-area-inset-top))
+      max(10px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom))
+      max(10px, env(safe-area-inset-left));
+  }
+  #gameScreen .game-header { gap: 8px; align-items: center; }
+  #gameScreen .submissions-status { max-height: 30px; }
+
+  #gameScreen .game-play { justify-content: center; gap: 8px; }
+  #gameScreen .tile {
+    width: calc(72px * var(--tile-scale));
+    height: calc(72px * var(--tile-scale));
+    font-size: calc(34px * var(--tile-scale));
+  }
+  #gameScreen .tiles { gap: 12px; }
+  #gameScreen .score-hint { max-width: 100%; padding: 4px 8px; font-size: calc(13px * var(--text-scale)); }
+  #gameScreen .score-hint-row { gap: 5px; }
+  #gameScreen .score-hint-row strong { font-size: calc(15px * var(--text-scale)); }
+  #gameScreen .score-hint-divider { height: 16px; }
+  #gameScreen .timer { max-width: 240px; }
+  #gameScreen .timer-bar { height: 8px; }
+  #gameScreen .timer-display { font-size: 26px; }
+  #gameScreen .timer-text-label { font-size: calc(8px * var(--text-scale)); }
+
+  #gameScreen .game-input-zone { justify-content: center; height: 100%; gap: 6px; }
+  #gameScreen .word-display { min-height: 40px; padding: 5px 10px; font-size: clamp(14px, 3vw, 19px); }
+  #gameScreen .word-display.empty { font-size: calc(11px * var(--text-scale)); }
+  #gameScreen .word-feedback { height: 14px; min-height: 14px; font-size: calc(10px * var(--text-scale)); }
+  #gameScreen .game-keyboard { gap: 4px; }
+  #gameScreen .keyboard-row { gap: 4px; }
+  #gameScreen .word-key { height: 37px; font-size: calc(12px * var(--text-scale)); }
+  #gameScreen .word-key-wide { font-size: calc(9px * var(--text-scale)); }
+  #gameScreen .game-submit-btn { min-height: 38px; padding: 8px 12px; font-size: calc(12px * var(--text-scale)); }
+  #gameScreen #gameReactions { align-self: end; gap: 4px; }
+  #gameScreen #gameReactions .reaction-btn { flex-basis: 28px; font-size: 14px; }
+}
+
+/* Extra-short landscape also survives notched safe-area padding. */
+@media (orientation: landscape) and (max-height: 340px) {
+  #gameScreen.active { gap: 4px 14px; }
+  #gameScreen .game-play { gap: 5px; }
+  #gameScreen .tile {
+    width: calc(64px * var(--tile-scale));
+    height: calc(64px * var(--tile-scale));
+    font-size: calc(30px * var(--tile-scale));
+  }
+  #gameScreen .word-display { min-height: 36px; }
+  #gameScreen .word-feedback { height: 13px; min-height: 13px; }
+  #gameScreen .word-key { height: 34px; }
+  #gameScreen .game-submit-btn { min-height: 36px; }
+  #gameScreen #gameReactions .reaction-btn { flex-basis: 26px; font-size: 13px; }
+}
+
+/* Comfort Mode needs a little extra compact spacing on short portrait phones.
+   Labels stay enlarged; only the gaps shrink. */
+@media (orientation: portrait) and (max-height: 700px) {
+  body.comfort-mode #gameScreen.active { gap: 5px; }
+  body.comfort-mode #gameScreen .game-play { gap: 4px; }
+  body.comfort-mode #gameScreen .game-input-zone { gap: 4px; }
+  body.comfort-mode #gameScreen .tile {
+    width: calc(66px * var(--tile-scale));
+    height: calc(66px * var(--tile-scale));
+    font-size: calc(30px * var(--tile-scale));
+  }
+  body.comfort-mode #gameScreen .score-hint { padding: 4px 8px; }
+  body.comfort-mode #gameScreen .timer-display { font-size: 26px; }
 }
 
 /* =========================================================================
@@ -2584,9 +3084,11 @@ body.timer-critical::before {
 /* Explicitly stop infinite looping attention-seekers so they never repeat */
 .comfort-mode .pulsing,
 .comfort-mode .timer-display.warning,
-.comfort-mode .screen-critical .tile {
+.comfort-mode .screen-critical .tiles {
   animation: none !important;
 }
+.comfort-mode .tile.bounce-in:nth-child(2) { animation-delay: 0s !important; }
+.comfort-mode .word-caret { animation: none !important; opacity: 1; }
 
 /* Remove decorative overlays/glows that sit on <body> itself.
    (.comfort-mode lives ON body, so these must be body.comfort-mode selectors,
@@ -2608,6 +3110,52 @@ body.comfort-mode.timer-critical::before { display: none; }
   box-shadow: 0 0 0 1px rgba(0,0,0,0.4) !important;
 }
 
+/* Very short Comfort Mode portrait with large safe-area insets: keep the
+   entire HUD usable without letting the play content overflow its grid row. */
+@media (orientation: portrait) and (max-height: 600px) {
+  body.comfort-mode #gameScreen.active { gap: 3px; }
+  body.comfort-mode #gameScreen .game-header { gap: 3px; }
+  body.comfort-mode #gameScreen .round-info {
+    padding: 2px 6px;
+    gap: 6px;
+    font-size: 13px;
+  }
+  body.comfort-mode #gameScreen .round-info strong { font-size: 14px; }
+  body.comfort-mode #gameScreen .room-code-chip { padding: 2px 5px; font-size: 10px; }
+  body.comfort-mode #gameDisconnectNotice {
+    height: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 1px 6px;
+    gap: 4px;
+    font-size: 10px;
+  }
+  body.comfort-mode #gameDisconnectNotice .disconnect-banner-icon {
+    width: 14px;
+    height: 14px;
+    font-size: 10px;
+  }
+  body.comfort-mode #gameScreen .game-play { gap: 2px; }
+  body.comfort-mode #gameScreen .game-input-zone { gap: 3px; }
+  body.comfort-mode #gameScreen .word-display {
+    min-height: 36px;
+    padding: 4px 8px;
+    font-size: 15px;
+  }
+  body.comfort-mode #gameScreen .word-feedback { height: 13px; min-height: 13px; font-size: 10px; }
+  body.comfort-mode #gameScreen .game-keyboard { gap: 3px; }
+  body.comfort-mode #gameScreen .keyboard-row { gap: 3px; }
+  body.comfort-mode #gameScreen .word-key { height: 34px; }
+  body.comfort-mode #gameScreen .word-key-wide { font-size: 9px; }
+  body.comfort-mode #gameScreen .game-submit-btn {
+    min-height: 40px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  body.comfort-mode #gameScreen #gameReactions { gap: 4px; }
+  body.comfort-mode #gameScreen #gameReactions .reaction-btn { flex-basis: 28px; font-size: 14px; }
+}
+
 /* =========================================================================
    prefers-reduced-motion — strip decorative motion, keep state changes
    ========================================================================= */
@@ -2623,8 +3171,10 @@ body.comfort-mode.timer-critical::before { display: none; }
   .pulsing,
   .timer-display.warning,
   .arcade-title,
-  .screen-critical .tile,
+  .screen-critical .tiles,
   .ready-badge.ready-on { animation: none !important; }
+  .tile.bounce-in:nth-child(2) { animation-delay: 0s !important; }
+  .word-caret { animation: none !important; opacity: 1; }
 }
 
 /* =========================================================================
@@ -2643,8 +3193,14 @@ body.comfort-mode.timer-critical::before { display: none; }
     background: var(--neon-green);
     border: 3px solid #ffffff;
   }
-  .arcade-input, .word-input {
+  .arcade-input,
+  #gameScreen .word-display {
     border: 2px solid #ffffff;
+    background: #000000;
+  }
+  #gameScreen .word-key {
+    border: 2px solid #ffffff;
+    background: #000000;
   }
   .tile {
     border-color: var(--neon-cyan);
