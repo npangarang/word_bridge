@@ -2130,6 +2130,54 @@ async function run() {
       }
     });
 
+    await test('solo end-screen ranking label is exactly You and never truncates', async () => {
+      const viewports = [
+        { name: '320x568', width: 320, height: 568 },
+        { name: '390x844', width: 390, height: 844 }
+      ];
+      for (const viewport of viewports) {
+        const page = await openNamePage(browser, server.origin, {
+          width: viewport.width,
+          height: viewport.height
+        });
+        try {
+          await startSolo(page);
+          await page.evaluate(() => {
+            soloPreviousBest = 0;
+            soloScore = 1;
+            soloRound = 10;
+            finishSoloRun();
+          });
+          await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
+
+          const state = await page.evaluate(() => {
+            const nameEl = document.querySelector('#finalRankings .rank-name');
+            const row = document.querySelector('#finalRankings .ranking-row');
+            const rect = nameEl.getBoundingClientRect();
+            return {
+              text: nameEl.textContent,
+              rowText: row ? row.textContent : '',
+              scrollWidth: nameEl.scrollWidth,
+              clientWidth: nameEl.clientWidth,
+              width: rect.width
+            };
+          });
+
+          assert.equal(state.text, 'You', `${viewport.name}: solo ranking label must be exactly You`);
+          assert.doesNotMatch(state.rowText, /\(you\)/);
+          assert.ok(state.width > 0, `${viewport.name}: ranking label must be visible`);
+          assert.ok(
+            state.scrollWidth <= state.clientWidth,
+            `${viewport.name}: solo You label truncated (${state.scrollWidth} > ${state.clientWidth})`
+          );
+          await page.screenshot(path.join(SCREENSHOTS, `solo-end-label-${viewport.name}.png`));
+          assert.deepEqual(page.pageErrors, []);
+        } finally {
+          await page.close();
+        }
+      }
+    });
+
     await test('standings and round-result announcements use singular and plural point forms', async () => {
       const page = await openGame(browser, server.origin, {
         playerNames: ['Tester', 'Opponent']
@@ -2153,6 +2201,7 @@ async function run() {
         }, score);
         const endState = () => page.evaluate(() => ({
           announce: document.getElementById('srAnnounce').textContent,
+          rankName: document.querySelector('#finalRankings .rank-name')?.textContent,
           rankText: document.querySelector('#finalRankings .rank-score')?.textContent,
           rankLabel: document.querySelector('#finalRankings .rank-score')?.getAttribute('aria-label')
         }));
@@ -2160,6 +2209,7 @@ async function run() {
         await endWithScore(1);
         await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
         let state = await endState();
+        assert.equal(state.rankName, 'Tester (you)', 'multiplayer must keep the (you) marker');
         assert.match(state.announce, /1\. Tester — 1 point\./);
         assert.doesNotMatch(state.announce, /1 points/);
         assert.equal(state.rankText, '1 pt');
