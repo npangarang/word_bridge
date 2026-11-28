@@ -2967,6 +2967,7 @@ function applyGameEnd(data, options = {}) {
 
   const rankingsHTML = sortedRankings.map((r, i) => {
     const isMe = r.id === myPlayerId || (soloRun && r.id === SOLO_PLAYER_ID);
+    const youSuffix = isMe && !soloRun ? ' (you)' : '';
     let rankClass, place, placeLabel;
     if (i === 0) { rankClass = 'rank-gold'; place = '1st'; placeLabel = '1st place'; }
     else if (i === 1) { rankClass = 'rank-silver'; place = '2nd'; placeLabel = '2nd place'; }
@@ -2975,7 +2976,7 @@ function applyGameEnd(data, options = {}) {
     return `
       <div class="ranking-row ${rankClass}${isMe ? ' me' : ''}" role="listitem">
         <span class="rank-place" aria-label="${placeLabel}">${place}</span>
-        <span class="rank-name">${escapeHtml(r.name)}${isMe ? ' (you)' : ''}</span>
+        <span class="rank-name">${escapeHtml(r.name)}${youSuffix}</span>
         <span class="rank-score" aria-label="${formatPoints(r.score)}">${formatPoints(r.score, true)}</span>
       </div>
     `;
