@@ -26,6 +26,7 @@ function playingSnapshot({
   round = 1,
   totalRounds = 10,
   playerNames = null,
+  playerScores = null,
   submittedOpponents = 0
 } = {}) {
   const now = Date.now();
@@ -40,7 +41,7 @@ function playingSnapshot({
     players: names.map((name, index) => ({
       id: `p${index + 1}`,
       name,
-      score: 0,
+      score: playerScores && playerScores[index] !== undefined ? playerScores[index] : 0,
       ready: true,
       comfortMode: false,
       connected: true,
@@ -89,6 +90,10 @@ const NO_COMFORT_INIT = `(() => {
   try { localStorage.removeItem('wb_comfort_mode'); } catch (e) {}
 })()`;
 
+const soloBestInit = value => `(() => {
+  try { localStorage.setItem('wb_solo_best_v1', ${JSON.stringify(String(value))}); } catch (e) {}
+})()`;
+
 const VIEWPORTS = [
   { name: 'phone-320x568', width: 320, height: 568 },
   { name: 'phone-360x640', width: 360, height: 640 },
@@ -111,6 +116,7 @@ async function openGame(browser, origin, options = {}) {
     contrast = false,
     waitMs = 1000,
     playerNames = null,
+    playerScores = null,
     submittedOpponents = 0
   } = options;
 
@@ -143,11 +149,56 @@ async function openGame(browser, origin, options = {}) {
     }
   }, [], 8000);
 
-  await firePlayingState(page, { deadlineMs, playerNames, submittedOpponents });
+  await firePlayingState(page, { deadlineMs, playerNames, playerScores, submittedOpponents });
 
   await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'gameScreen');
   await page.waitForTimeout(waitMs);
   return page;
+}
+
+async function openNamePage(browser, origin, options = {}) {
+  const {
+    width = 390,
+    height = 844,
+    initScripts = [],
+    safeArea = null
+  } = options;
+  const page = await browser.newPage({ width, height, origin, initScripts, safeArea });
+  await page.goto(origin + '/');
+  await page.waitForFunction(() => {
+    try {
+      return !!document.getElementById('soloBtn') &&
+        typeof wordLookupClient !== 'undefined' &&
+        Object.keys(wordLookupClient).length > 0 &&
+        typeof wordCategoriesClient !== 'undefined' &&
+        Object.keys(wordCategoriesClient).length > 0;
+    } catch {
+      return false;
+    }
+  }, [], 8000);
+  return page;
+}
+
+async function startSolo(page) {
+  await page.click('#soloBtn');
+  await page.waitForFunction(() => (
+    typeof soloMode !== 'undefined' &&
+    soloMode &&
+    document.querySelector('.screen.active')?.id === 'gameScreen'
+  ), [], 5000);
+  await page.waitForTimeout(250);
+}
+
+function soloWordForCurrentPair(page) {
+  return page.evaluate(() => {
+    const key = (currentStartLetter + currentEndLetter).toLowerCase();
+    const words = [...(wordLookupClient[key] || [])];
+    return words.find(word => /^[a-z]{3,20}$/.test(word)) || null;
+  });
+}
+
+async function typeWord(page, word) {
+  for (const character of word) await page.press(character);
 }
 
 async function resetRound(page, deadlineMs = 10000) {
@@ -233,11 +284,12 @@ async function controlGeometry(page) {
       document.querySelector('#gameScreen .round-info'),
       document.querySelector('#gameScreen .room-code-chip'),
       document.getElementById('scoreHint'),
+      ...document.querySelectorAll('#scoreHint .score-hint-row, #scoreHint .score-hint-opponent'),
       document.getElementById('timer'),
       document.getElementById('wordFeedback'),
       document.getElementById('tile1'),
       document.getElementById('tile2')
-    ].filter(Boolean);
+    ].filter(element => element && !element.hidden);
 
     const clipped = layoutControls
       .filter(element => {
@@ -288,6 +340,100 @@ async function controlGeometry(page) {
       clipped,
       outsideSafeArea,
       covered
+    };
+  });
+}
+
+function readScoreboard(page) {
+  return page.evaluate(() => {
+    const rect = element => {
+      const r = element.getBoundingClientRect();
+      return {
+        top: +r.top.toFixed(1),
+        right: +r.right.toFixed(1),
+        bottom: +r.bottom.toFixed(1),
+        left: +r.left.toFixed(1),
+        width: +r.width.toFixed(1),
+        height: +r.height.toFixed(1)
+      };
+    };
+    const rowData = element => {
+      const nameEl = element.querySelector('.score-hint-opp-name');
+      const scoreEl = element.querySelector('.score-hint-opp-score');
+      return {
+        pid: element.dataset.pid || null,
+        name: nameEl ? nameEl.textContent : null,
+        score: scoreEl ? scoreEl.textContent : null,
+        label: element.getAttribute('aria-label'),
+        title: element.title,
+        nameOverflow: nameEl
+          ? { scrollWidth: nameEl.scrollWidth, clientWidth: nameEl.clientWidth, textOverflow: getComputedStyle(nameEl).textOverflow }
+          : null
+      };
+    };
+    const opponents = [...document.querySelectorAll('#scoreHint .score-hint-opponent')];
+    return {
+      you: document.getElementById('scoreHintYou').textContent,
+      best: document.getElementById('scoreHintBest').textContent,
+      bestHidden: document.getElementById('scoreHintBestRow').hidden,
+      emptyHidden: document.getElementById('scoreHintEmpty').hidden,
+      opponents: opponents.map(rowData),
+      opponentRects: opponents.map(rect),
+      scoreboard: rect(document.getElementById('scoreHint'))
+    };
+  });
+}
+
+function readKeyboardLayout(page) {
+  return page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#gameKeyboard .keyboard-row')].map(row => (
+      [...row.querySelectorAll('.word-key')].map(key => ({
+        key: key.dataset.key || null,
+        action: key.dataset.action || null,
+        label: key.getAttribute('aria-label'),
+        rect: (() => {
+          const r = key.getBoundingClientRect();
+          return {
+            top: +r.top.toFixed(1),
+            bottom: +r.bottom.toFixed(1),
+            left: +r.left.toFixed(1),
+            right: +r.right.toFixed(1),
+            width: +r.width.toFixed(1),
+            height: +r.height.toFixed(1)
+          };
+        })()
+      }))
+    ));
+    return { rows };
+  });
+}
+
+function readVerticalOrder(page) {
+  return page.evaluate(() => {
+    const rect = element => {
+      const r = element.getBoundingClientRect();
+      return {
+        top: +r.top.toFixed(1),
+        bottom: +r.bottom.toFixed(1),
+        left: +r.left.toFixed(1),
+        right: +r.right.toFixed(1),
+        width: +r.width.toFixed(1),
+        height: +r.height.toFixed(1)
+      };
+    };
+    const game = document.getElementById('gameScreen');
+    const gameStyle = getComputedStyle(game);
+    return {
+      innerHeight,
+      contentBottom: +(game.getBoundingClientRect().bottom - parseFloat(gameStyle.paddingBottom)).toFixed(1),
+      paddingBottom: parseFloat(gameStyle.paddingBottom),
+      answer: rect(document.getElementById('wordDisplay')),
+      timer: rect(document.getElementById('timer')),
+      reactions: rect(document.getElementById('gameReactions')),
+      submit: rect(document.getElementById('submitWordBtn')),
+      keyboard: rect(document.querySelector('.game-keyboard')),
+      feedback: rect(document.getElementById('wordFeedback')),
+      score: rect(document.getElementById('scoreHint'))
     };
   });
 }
@@ -476,6 +622,191 @@ async function run() {
       }
     });
 
+    await test('on-screen keyboard uses the iOS rows with dash left and a wide backspace right', async () => {
+      const page = await openGame(browser, server.origin, { width: 390, height: 844 });
+      try {
+        const layout = await readKeyboardLayout(page);
+        assert.equal(layout.rows.length, 3);
+        assert.deepEqual(layout.rows[0].map(key => key.key), ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P']);
+        assert.deepEqual(layout.rows[1].map(key => key.key), ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L']);
+        assert.deepEqual(layout.rows[2].map(key => key.key), ['-', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', null]);
+        assert.equal(layout.rows[2][8].action, 'backspace');
+        assert.equal(layout.rows[2][8].label, 'Delete last letter');
+        assert.equal(layout.rows[2][8].rect.width > layout.rows[2][1].rect.width * 1.2, true,
+          'backspace must be visibly wider than a letter key');
+        assert.equal(layout.rows[2][0].rect.left < layout.rows[2][1].rect.left, true,
+          'dash must be the leftmost key in the bottom row');
+        assert.equal(layout.rows[2][8].rect.left > layout.rows[2][7].rect.right, true,
+          'backspace must be the rightmost key in the bottom row');
+
+        for (const key of layout.rows.flat()) {
+          assert.ok(key.rect.height >= 46 && key.rect.height <= 52,
+            `${key.label} height ${key.rect.height} should be an iOS-like 46-52px at 390px width`);
+          assert.ok(key.label, 'every key needs an accessible name');
+        }
+
+        const geometry = await controlGeometry(page);
+        assert.deepEqual(geometry.clipped, [], `clipped keyboard controls: ${JSON.stringify(geometry.clipped)}`);
+        assert.deepEqual(geometry.covered, [], `covered keyboard controls: ${JSON.stringify(geometry.covered)}`);
+        await page.screenshot(path.join(SCREENSHOTS, 'game-ios-keyboard-390x844.png'));
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('keyboard sits at the bottom; submit and reactions stack directly above it', async () => {
+      const page = await openGame(browser, server.origin, { width: 390, height: 844 });
+      try {
+        const order = await readVerticalOrder(page);
+        const contentBottom = Math.max(
+          order.answer.bottom,
+          order.timer.bottom,
+          order.feedback.bottom,
+          order.score.bottom
+        );
+        assert.ok(contentBottom <= order.reactions.top + 0.5,
+          `answer/timer content must stay above reactions: ${contentBottom} > ${order.reactions.top}`);
+        assert.ok(order.reactions.bottom <= order.submit.top + 0.5,
+          `reactions must stay above submit: ${order.reactions.bottom} > ${order.submit.top}`);
+        assert.ok(order.submit.bottom <= order.keyboard.top + 0.5,
+          `submit must stay above the keyboard: ${order.submit.bottom} > ${order.keyboard.top}`);
+        assert.ok(Math.abs(order.keyboard.bottom - order.contentBottom) <= 0.75,
+          `keyboard must end flush with the bottom safe area: ${order.keyboard.bottom} vs ${order.contentBottom}`);
+        assert.ok(order.keyboard.bottom <= order.innerHeight + 0.5);
+        assert.ok(order.submit.width > 0 && order.reactions.width > 0);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('scoreboard lists named opponents in score order and updates on restore', async () => {
+      const page = await openGame(browser, server.origin, {
+        width: 390,
+        height: 844,
+        playerNames: ['Tester', 'Alice', 'Bob', 'Cara'],
+        playerScores: [0, 1, 4, 4]
+      });
+      try {
+        let board = await readScoreboard(page);
+        assert.equal(board.you, '0');
+        assert.equal(board.bestHidden, true);
+        assert.deepEqual(board.opponents.map(row => `${row.name} ${row.score}`), ['Bob 4', 'Cara 4', 'Alice 1'],
+          'descending score with roster order breaking ties');
+        assert.equal(board.opponents.find(row => row.name === 'Alice').label, 'Alice: 1 point');
+        assert.equal(
+          await page.evaluate(() => document.getElementById('scoreHintMeRow').getAttribute('aria-label')),
+          'You: 0 points'
+        );
+        assert.equal(board.emptyHidden, true);
+
+        const updated = playingSnapshot({
+          playerNames: ['Tester', 'Alice', 'Bob', 'Cara'],
+          playerScores: [0, 2, 4, 7]
+        });
+        await page.evaluate(state => window.__socket.fire('roomStateRestored', state), updated);
+        await page.waitForTimeout(150);
+        board = await readScoreboard(page);
+        assert.deepEqual(board.opponents.map(row => `${row.name} ${row.score}`), ['Cara 7', 'Bob 4', 'Alice 2'],
+          'a restore must re-render names and re-sort live scores');
+        assert.equal(await page.evaluate(() => document.querySelectorAll('#scoreHint .score-hint-opponent').length), 3,
+          'score updates must not duplicate rows');
+        assert.equal(await page.evaluate(() => document.getElementById('scoreHint').getAttribute('aria-live')), 'polite');
+
+        // The live roundEnd -> roundStart path must update the same rows too.
+        await page.evaluate(() => {
+          const results = [
+            { playerId: 'p1', name: 'Tester', word: 'art', isValid: true, timeTaken: 1.2, points: 4, bonus: 0, totalScore: 3 },
+            { playerId: 'p2', name: 'Alice', word: 'ant', isValid: true, timeTaken: 1.6, points: 4, bonus: 1, totalScore: 2 },
+            { playerId: 'p3', name: 'Bob', word: 'at', isValid: false, timeTaken: 2, points: 0, bonus: 0, totalScore: 4 },
+            { playerId: 'p4', name: 'Cara', word: 'art', isValid: true, timeTaken: 1.1, points: 4, bonus: 1, totalScore: 7 }
+          ];
+          window.__socket.fire('roundEnd', {
+            results,
+            pair: ['A', 'T'],
+            round: 1,
+            totalRounds: 10,
+            examples: ['art']
+          });
+        });
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'resultScreen');
+        await page.evaluate(deadline => {
+          window.__socket.fire('roundStart', {
+            round: 2,
+            totalRounds: 10,
+            startLetter: 'A',
+            endLetter: 'T',
+            deadline: Date.now() + deadline,
+            timeLeft: 10,
+            matchId: 'ui-test-match-1'
+          });
+        }, 10000);
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'gameScreen');
+        board = await readScoreboard(page);
+        assert.deepEqual(board.opponents.map(row => `${row.name} ${row.score}`), ['Cara 7', 'Bob 4', 'Alice 2'],
+          'round score changes must re-sort named rows live');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('scoreboard supports 2, 4 and 8 players without clipping on a 320px screen', async () => {
+      const guests = ['Blake', 'Casey', 'Dana', 'Eli', 'Frank', 'Gale', 'Hana'];
+      for (const count of [2, 4, 8]) {
+        const names = ['Tester', ...guests.slice(0, count - 1)];
+        const scores = [0, 5, 3, 1, 7, 2, 4, 6].slice(0, count);
+        const page = await openGame(browser, server.origin, {
+          width: 320,
+          height: 568,
+          playerNames: names,
+          playerScores: scores
+        });
+        try {
+          const board = await readScoreboard(page);
+          assert.equal(board.opponents.length, count - 1, `${count}-player scoreboard should show every opponent`);
+          const geometry = await controlGeometry(page);
+          assert.deepEqual(geometry.clipped, [], `${count}-player clipped: ${JSON.stringify(geometry.clipped)}`);
+          assert.deepEqual(geometry.outsideSafeArea, [], `${count}-player outside safe area: ${JSON.stringify(geometry.outsideSafeArea)}`);
+          assert.deepEqual(geometry.covered, [], `${count}-player covered: ${JSON.stringify(geometry.covered)}`);
+          assert.ok(board.scoreboard.right <= 320 && board.scoreboard.left >= 0);
+          if (count === 8) {
+            await page.screenshot(path.join(SCREENSHOTS, 'game-8players-named-scores-320x568.png'));
+          }
+          assert.deepEqual(page.pageErrors, []);
+        } finally {
+          await page.close();
+        }
+      }
+    });
+
+    await test('long opponent names truncate visually but keep the full name for assistive tech', async () => {
+      const page = await openGame(browser, server.origin, {
+        width: 320,
+        height: 568,
+        playerNames: ['Tester', 'AlexandriaTheGreat'],
+        playerScores: [0, 3]
+      });
+      try {
+        const board = await readScoreboard(page);
+        const row = board.opponents[0];
+        assert.equal(row.name, 'AlexandriaTheGreat');
+        assert.equal(row.score, '3');
+        assert.equal(row.nameOverflow.textOverflow, 'ellipsis');
+        assert.ok(row.nameOverflow.scrollWidth > row.nameOverflow.clientWidth,
+          'long name must actually be truncated in the narrow slot');
+        assert.match(row.label, /AlexandriaTheGreat/);
+        assert.match(row.label, /3 points/);
+        assert.match(row.title, /AlexandriaTheGreat/);
+        const geometry = await controlGeometry(page);
+        assert.deepEqual(geometry.clipped, [], `long-name clipped: ${JSON.stringify(geometry.clipped)}`);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
     await test('on-screen keyboard types, deletes, supports hyphen, and submits', async () => {
       const page = await openGame(browser, server.origin);
       try {
@@ -568,13 +899,19 @@ async function run() {
     await test('native keyboard Tab/Space/Enter on a letter button keeps button focus and activates it once', async () => {
       const page = await openGame(browser, server.origin);
       try {
-        await page.press('Tab');
-        const firstFocus = await page.evaluate(() => ({
-          id: document.activeElement.id,
-          label: document.activeElement.getAttribute && document.activeElement.getAttribute('aria-label')
-        }));
+        // The requested vertical order places reactions and submit before the
+        // keyboard in the tab sequence too. Walk Tab until the first letter key.
+        let firstFocus = null;
+        for (let i = 0; i < 20; i += 1) {
+          await page.press('Tab');
+          firstFocus = await page.evaluate(() => ({
+            id: document.activeElement.id,
+            label: document.activeElement.getAttribute && document.activeElement.getAttribute('aria-label')
+          }));
+          if (firstFocus.label === 'Letter Q') break;
+        }
         assert.equal(firstFocus.id, '', 'focus should leave the answer display');
-        assert.equal(firstFocus.label, 'Letter Q', 'Tab should reach the first on-screen letter');
+        assert.equal(firstFocus.label, 'Letter Q', 'Tab must reach the first on-screen letter');
 
         await page.press(' ');
         assert.equal(await wordValue(page), 'Q');
@@ -1289,6 +1626,13 @@ async function run() {
         assert.deepEqual(portraitGeometry.outsideSafeArea, [],
           `portrait controls outside safe-area content: ${JSON.stringify(portraitGeometry.outsideSafeArea)}`);
         assert.deepEqual(portraitGeometry.covered, [], `portrait controls covered: ${JSON.stringify(portraitGeometry.covered)}`);
+        const portraitOrder = await readVerticalOrder(portrait);
+        assert.equal(portraitOrder.paddingBottom >= 34, true,
+          `portrait bottom safe area not applied: ${portraitOrder.paddingBottom}`);
+        assert.ok(Math.abs(portraitOrder.keyboard.bottom - portraitOrder.contentBottom) <= 0.75,
+          `portrait keyboard must be flush to the safe area: ${portraitOrder.keyboard.bottom} vs ${portraitOrder.contentBottom}`);
+        assert.ok(portraitOrder.submit.bottom <= portraitOrder.keyboard.top + 0.5);
+        assert.ok(portraitOrder.reactions.bottom <= portraitOrder.submit.top + 0.5);
         assert.deepEqual(portrait.pageErrors, []);
       } finally {
         await portrait.close();
@@ -1328,6 +1672,13 @@ async function run() {
         assert.deepEqual(landscapeGeometry.outsideSafeArea, [],
           `landscape controls outside safe-area content: ${JSON.stringify(landscapeGeometry.outsideSafeArea)}`);
         assert.deepEqual(landscapeGeometry.covered, [], `landscape controls covered: ${JSON.stringify(landscapeGeometry.covered)}`);
+        const landscapeOrder = await readVerticalOrder(landscape);
+        assert.equal(landscapeOrder.paddingBottom >= 21, true,
+          `landscape bottom safe area not applied: ${landscapeOrder.paddingBottom}`);
+        assert.ok(Math.abs(landscapeOrder.keyboard.bottom - landscapeOrder.contentBottom) <= 0.75,
+          `landscape keyboard must be flush to the safe area: ${landscapeOrder.keyboard.bottom} vs ${landscapeOrder.contentBottom}`);
+        assert.ok(landscapeOrder.submit.bottom <= landscapeOrder.keyboard.top + 0.5);
+        assert.ok(landscapeOrder.reactions.bottom <= landscapeOrder.submit.top + 0.5);
         assert.deepEqual(landscape.pageErrors, []);
       } finally {
         await landscape.close();
@@ -1518,6 +1869,417 @@ async function run() {
         assert.deepEqual(page.pageErrors, []);
       } finally {
         await page.close();
+      }
+    });
+
+    await test('solo scores a fast valid word, shows BEST in the score slot, and emits no room events', async () => {
+      const page = await openNamePage(browser, server.origin, {
+        initScripts: [soloBestInit(42)]
+      });
+      try {
+        const entry = await page.evaluate(() => {
+          const button = document.getElementById('soloBtn');
+          const badge = document.getElementById('soloBestName');
+          const b = button.getBoundingClientRect();
+          const s = badge.getBoundingClientRect();
+          return {
+            buttonText: button.textContent.trim(),
+            badgeText: badge.textContent.trim(),
+            sameRow: Math.abs((b.top + b.bottom) / 2 - (s.top + s.bottom) / 2) < 4,
+            buttonLeftOfBadge: b.right <= s.left + 1,
+            best: soloBest
+          };
+        });
+        assert.equal(entry.buttonText, 'SOLO');
+        assert.equal(entry.badgeText, 'BEST 42');
+        assert.equal(entry.sameRow, true, 'BEST must sit next to the SOLO button');
+        assert.equal(entry.buttonLeftOfBadge, true);
+        assert.equal(entry.best, 42);
+
+        await startSolo(page);
+        const round = await page.evaluate(() => ({
+          mode: soloMode,
+          round: currentRound,
+          total: totalRounds,
+          remaining: roundDeadline - Date.now(),
+          active: document.querySelector('.screen.active')?.id
+        }));
+        assert.equal(round.mode, true);
+        assert.equal(round.round, 1);
+        assert.equal(round.total, 10);
+        assert.equal(round.active, 'gameScreen');
+        assert.ok(round.remaining > 0 && round.remaining <= 10000);
+
+        const board = await readScoreboard(page);
+        assert.equal(board.bestHidden, false, 'solo score slot must show BEST');
+        assert.equal(board.best, '42');
+        assert.equal(board.you, '0');
+        assert.equal(board.opponents.length, 0);
+        await page.screenshot(path.join(SCREENSHOTS, 'solo-round-390x844.png'));
+
+        const word = await soloWordForCurrentPair(page);
+        assert.ok(word, 'solo round must expose a typeable dictionary word');
+        await typeWord(page, word);
+        await page.press('Enter');
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'resultScreen' &&
+          typeof soloScore !== 'undefined' && soloScore === 2
+        ), [], 5000);
+
+        const result = await page.evaluate(() => ({
+          score: soloScore,
+          resultText: document.getElementById('resultCards').textContent,
+          bestStored: localStorage.getItem('wb_solo_best_v1'),
+          emits: window.__socketEmits
+        }));
+        assert.equal(result.score, 2, 'valid word must score 1 point plus the within-3s bonus');
+        assert.match(result.resultText, /\+2 pts/);
+        assert.match(result.resultText, /\+1 speed bonus/);
+        // A duplicate end (submit timeout racing the round timer) must be inert.
+        await page.evaluate(() => endSoloRound());
+        assert.equal(await page.evaluate(() => soloScore), 2);
+        await page.screenshot(path.join(SCREENSHOTS, 'solo-result-390x844.png'));
+        assert.equal(result.bestStored, '42', 'a lower solo run must not overwrite the stored best');
+        const forbidden = ['createRoom', 'joinRoom', 'submitWord', 'readyUp', 'startGame', 'requestPlayAgain'];
+        assert.deepEqual(result.emits.filter(item => forbidden.includes(item.event)), [],
+          'solo must not emit room or submission events');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('solo awards no speed bonus after 3 seconds and scores 0 for a missed round', async () => {
+      const page = await openNamePage(browser, server.origin);
+      try {
+        await startSolo(page);
+        const word = await soloWordForCurrentPair(page);
+        assert.ok(word);
+        await page.evaluate(() => { soloRoundStartTime = Date.now() - 4000; });
+        await typeWord(page, word);
+        await page.press('Enter');
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'resultScreen' &&
+          typeof soloScore !== 'undefined' && soloScore === 1
+        ), [], 5000);
+
+        let result = await page.evaluate(() => ({
+          score: soloScore,
+          text: document.getElementById('resultCards').textContent
+        }));
+        assert.equal(result.score, 1, 'a valid word after 3s scores one point, not two');
+        assert.match(result.text, /\+1 pt/);
+        assert.doesNotMatch(result.text, /\+1 pts/);
+        assert.doesNotMatch(result.text, /speed bonus/);
+
+        // Skip the results pause; then let the second round expire untouched.
+        await page.evaluate(() => startSoloRound());
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'gameScreen' &&
+          currentRound === 2
+        ), [], 5000);
+        await page.evaluate(() => { roundDeadline = Date.now() + 120; });
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'resultScreen' &&
+          currentRound === 2
+        ), [], 5000);
+
+        result = await page.evaluate(() => ({
+          score: soloScore,
+          text: document.getElementById('resultCards').textContent
+        }));
+        assert.equal(result.score, 1, 'a missed round must add zero');
+        assert.match(result.text, /\+0 pts/);
+        assert.match(result.text, /Invalid word/);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('solo best persists, marks NEW BEST, replays fresh, and returns to the menu', async () => {
+      const page = await openNamePage(browser, server.origin, {
+        initScripts: [soloBestInit(5)]
+      });
+      try {
+        await startSolo(page);
+        await page.evaluate(() => {
+          soloScore = 7;
+          soloPreviousBest = 5;
+          soloRound = 10;
+          finishSoloRun();
+        });
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen', [], 5000);
+
+        let end = await page.evaluate(() => ({
+          stored: localStorage.getItem('wb_solo_best_v1'),
+          best: soloBest,
+          endBest: document.getElementById('soloBestEnd').textContent,
+          newBestHidden: document.getElementById('soloNewBestBadge').hidden,
+          winner: document.getElementById('winnerDisplay').textContent,
+          playAgainDisplay: document.getElementById('playAgainBtn').style.display,
+          returnText: document.getElementById('returnToLobbyBtn').textContent
+        }));
+        assert.equal(end.stored, '7');
+        assert.equal(end.best, 7);
+        assert.equal(end.endBest, '7');
+        assert.equal(end.newBestHidden, false, 'beating the stored best must show NEW BEST');
+        assert.match(end.winner, /NEW BEST/);
+        assert.equal(end.playAgainDisplay, 'inline-block');
+        assert.equal(end.returnText, 'MAIN MENU');
+        await page.screenshot(path.join(SCREENSHOTS, 'solo-end-390x844.png'));
+
+        await page.click('#playAgainBtn');
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'gameScreen' &&
+          currentRound === 1 &&
+          soloScore === 0
+        ), [], 5000);
+        const replay = await page.evaluate(() => ({
+          best: soloBest,
+          bestInSlot: document.getElementById('scoreHintBest').textContent,
+          newBestHidden: document.getElementById('soloNewBestBadge').hidden
+        }));
+        assert.equal(replay.best, 7);
+        assert.equal(replay.bestInSlot, '7');
+        assert.equal(replay.newBestHidden, true);
+
+        await page.evaluate(() => {
+          soloScore = 3;
+          soloRound = 10;
+          soloPreviousBest = 7;
+          finishSoloRun();
+        });
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen', [], 5000);
+        end = await page.evaluate(() => ({
+          stored: localStorage.getItem('wb_solo_best_v1'),
+          endBest: document.getElementById('soloBestEnd').textContent,
+          newBestHidden: document.getElementById('soloNewBestBadge').hidden,
+          winner: document.getElementById('winnerDisplay').textContent
+        }));
+        assert.equal(end.stored, '7', 'a worse replay must preserve the stored best');
+        assert.equal(end.endBest, '7');
+        assert.equal(end.newBestHidden, true);
+        assert.match(end.winner, /SOLO SCORE 3/);
+
+        await page.click('#returnToLobbyBtn');
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'nameScreen' &&
+          soloMode === false
+        ), [], 5000);
+        const menu = await page.evaluate(() => ({
+          badge: document.getElementById('soloBestName').textContent,
+          playAgainDisplay: document.getElementById('playAgainBtn').style.display
+        }));
+        assert.equal(menu.badge, 'BEST 7');
+        assert.equal(menu.playAgainDisplay, 'none');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('solo end screen and announcement use singular and plural point forms', async () => {
+      const page = await openNamePage(browser, server.origin);
+      try {
+        const readEnd = () => page.evaluate(() => ({
+          winner: document.getElementById('winnerDisplay').textContent,
+          announce: document.getElementById('srAnnounce').textContent,
+          rankText: document.querySelector('#finalRankings .rank-score')?.textContent,
+          rankLabel: document.querySelector('#finalRankings .rank-score')?.getAttribute('aria-label')
+        }));
+
+        await startSolo(page);
+        await page.evaluate(() => {
+          soloPreviousBest = 0;
+          soloScore = 1;
+          soloRound = 10;
+          finishSoloRun();
+        });
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
+        let end = await readEnd();
+        assert.equal(end.winner, 'NEW BEST — 1 point!');
+        assert.equal(end.rankText, '1 pt');
+        assert.equal(end.rankLabel, '1 point');
+        assert.match(end.announce, /NEW BEST — 1 point!/);
+        assert.match(end.announce, /Best 1 point\./);
+        assert.doesNotMatch(end.announce, /1 points/);
+
+        await page.click('#playAgainBtn');
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'gameScreen' &&
+          currentRound === 1
+        ), [], 5000);
+        await page.evaluate(() => {
+          soloPreviousBest = 1;
+          soloScore = 2;
+          soloRound = 10;
+          finishSoloRun();
+        });
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
+        end = await readEnd();
+        assert.equal(end.winner, 'NEW BEST — 2 points!');
+        assert.equal(end.rankText, '2 pts');
+        assert.equal(end.rankLabel, '2 points');
+        assert.match(end.announce, /NEW BEST — 2 points!/);
+        assert.match(end.announce, /Best 2 points\./);
+        assert.doesNotMatch(end.announce, /2 point\./);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('standings and round-result announcements use singular and plural point forms', async () => {
+      const page = await openGame(browser, server.origin, {
+        playerNames: ['Tester', 'Opponent']
+      });
+      try {
+        const endWithScore = score => page.evaluate(points => {
+          applyGameEnd({
+            players: [
+              { id: 'p1', name: 'Tester' },
+              { id: 'p2', name: 'Opponent' }
+            ],
+            rankings: [
+              { id: 'p1', name: 'Tester', score: points },
+              { id: 'p2', name: 'Opponent', score: 0 }
+            ],
+            winnerId: 'p1',
+            isTie: false,
+            canPlayAgain: true,
+            forfeit: false
+          });
+        }, score);
+        const endState = () => page.evaluate(() => ({
+          announce: document.getElementById('srAnnounce').textContent,
+          rankText: document.querySelector('#finalRankings .rank-score')?.textContent,
+          rankLabel: document.querySelector('#finalRankings .rank-score')?.getAttribute('aria-label')
+        }));
+
+        await endWithScore(1);
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'endScreen');
+        let state = await endState();
+        assert.match(state.announce, /1\. Tester — 1 point\./);
+        assert.doesNotMatch(state.announce, /1 points/);
+        assert.equal(state.rankText, '1 pt');
+        assert.equal(state.rankLabel, '1 point');
+
+        await endWithScore(2);
+        await page.waitForTimeout(50);
+        state = await endState();
+        assert.match(state.announce, /1\. Tester — 2 points\./);
+        assert.equal(state.rankText, '2 pts');
+        assert.equal(state.rankLabel, '2 points');
+
+        const roundWithScore = points => page.evaluate(value => {
+          applyRoundEnd({
+            results: [
+              {
+                playerId: 'p1',
+                name: 'Tester',
+                word: 'art',
+                isValid: true,
+                timeTaken: 1.2,
+                points: value,
+                bonus: 0,
+                totalScore: value
+              },
+              {
+                playerId: 'p2',
+                name: 'Opponent',
+                word: 'ant',
+                isValid: true,
+                timeTaken: 2,
+                points: 0,
+                bonus: 0,
+                totalScore: 0
+              }
+            ],
+            pair: ['A', 'T'],
+            round: 1,
+            totalRounds: 10,
+            examples: ['art']
+          });
+        }, points);
+
+        await roundWithScore(1);
+        await page.waitForFunction(() => document.querySelector('.screen.active')?.id === 'resultScreen');
+        let announce = await page.evaluate(() => document.getElementById('srAnnounce').textContent);
+        assert.match(announce, /You scored 1 point with "art"\. Your total is 1 point\./);
+        assert.doesNotMatch(announce, /1 points/);
+        assert.match(await page.evaluate(() => document.getElementById('resultCards').textContent), /\+1 pt/);
+
+        await roundWithScore(2);
+        await page.waitForTimeout(50);
+        announce = await page.evaluate(() => document.getElementById('srAnnounce').textContent);
+        assert.match(announce, /You scored 2 points with "art"\. Your total is 2 points\./);
+        assert.match(await page.evaluate(() => document.getElementById('resultCards').textContent), /\+2 pts/);
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('corrupt solo best storage falls back to zero without throwing', async () => {
+      const page = await openNamePage(browser, server.origin, {
+        initScripts: [soloBestInit('{not valid json')]
+      });
+      try {
+        const state = await page.evaluate(() => ({
+          best: soloBest,
+          badge: document.getElementById('soloBestName').textContent,
+          raw: localStorage.getItem('wb_solo_best_v1')
+        }));
+        assert.equal(state.best, 0);
+        assert.equal(state.badge, 'BEST 0');
+        assert.equal(state.raw, '{not valid json');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+      }
+    });
+
+    await test('solo completes a scoring round with no socket client at all', async () => {
+      const noSocketServer = await startStaticServer(ROOT, { socketClient: false });
+      const page = await openNamePage(browser, noSocketServer.origin, {
+        initScripts: [NO_COMFORT_INIT]
+      });
+      try {
+        const boot = await page.evaluate(() => ({
+          ioType: typeof window.io,
+          fakeSocket: typeof window.__socket,
+          connected: socket.connected,
+          soloButton: !!document.getElementById('soloBtn')
+        }));
+        assert.equal(boot.ioType, 'undefined');
+        assert.equal(boot.fakeSocket, 'undefined');
+        assert.equal(boot.connected, false);
+        assert.equal(boot.soloButton, true);
+
+        await startSolo(page);
+        assert.equal(await page.evaluate(() => soloMode), true);
+        const word = await soloWordForCurrentPair(page);
+        assert.ok(word);
+        await typeWord(page, word);
+        await page.press('Enter');
+        await page.waitForFunction(() => (
+          document.querySelector('.screen.active')?.id === 'resultScreen' &&
+          soloScore === 2
+        ), [], 5000);
+
+        const state = await page.evaluate(() => ({
+          score: soloScore,
+          resultText: document.getElementById('resultCards').textContent,
+          fakeSocket: typeof window.__socket
+        }));
+        assert.equal(state.score, 2);
+        assert.match(state.resultText, /\+2 pts/);
+        assert.equal(state.fakeSocket, 'undefined');
+        assert.deepEqual(page.pageErrors, []);
+      } finally {
+        await page.close();
+        await noSocketServer.close();
       }
     });
 

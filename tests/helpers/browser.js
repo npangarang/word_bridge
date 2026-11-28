@@ -66,8 +66,9 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8'
 };
 
-function startStaticServer(rootDir) {
+function startStaticServer(rootDir, options = {}) {
   const root = path.resolve(rootDir);
+  const socketClient = options.socketClient !== false;
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -85,7 +86,9 @@ function startStaticServer(rootDir) {
           'Content-Type': MIME['.js'],
           'Cache-Control': 'no-store'
         });
-        res.end(FAKE_SOCKET_SOURCE);
+        // The no-socket lane intentionally omits the `io` global so solo mode
+        // is exercised against an app that cannot open any transport.
+        res.end(socketClient ? FAKE_SOCKET_SOURCE : '/* socket.io unavailable in this static test */');
         return;
       }
 
